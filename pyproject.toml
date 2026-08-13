@@ -1,0 +1,19 @@
+[project]
+name = "evolution"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Teddy Coder", email = "fedor_coder@mail.ru" }
+]
+requires-python = ">=3.12.12"
+dependencies = [
+    "pygame-ce>=2.5.8",
+]
+
+[project.scripts]
+evolution = "evolution:main"
+
+[build-system]
+requires = ["uv_build>=0.11.30,<0.12.0"]
+build-backend = "uv_build"
