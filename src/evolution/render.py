@@ -7,7 +7,7 @@ import math
 import pygame
 
 from evolution import config, hexgrid
-from evolution.creature import THRUSTER, Creature
+from evolution.creature import THRUSTER, Creature, cell_color
 from evolution.world import Food, World
 
 
@@ -59,8 +59,6 @@ def draw_creature(
 ) -> None:
     cx, cy = camera
     active_groups = active_groups or set()
-    skin = config.SKIN_COLOR if creature.is_player else config.ENEMY_SKIN_COLOR
-    thruster = config.THRUSTER_COLOR if creature.is_player else config.ENEMY_THRUSTER_COLOR
 
     for coord in creature.alive_cells:
         spec = creature.blueprint.cells[coord]
@@ -69,12 +67,7 @@ def draw_creature(
         if not (-40 <= sx <= config.WIDTH + 40 and -40 <= sy <= config.HEIGHT + 40):
             continue
 
-        if coord == (0, 0):
-            color = config.CORE_COLOR
-        elif spec.kind == THRUSTER:
-            color = thruster
-        else:
-            color = skin
+        color = cell_color(coord, spec, creature.is_player)
         draw_hex(surface, (sx, sy), config.HEX_SIZE, color, creature.angle)
 
         if spec.kind == THRUSTER:
@@ -94,12 +87,20 @@ def draw_creature(
 
 
 def draw_food(surface: pygame.Surface, food: Food, camera: tuple[float, float]) -> None:
+    """Обломок выглядит как клетка, которой он был, — только гаснет со временем."""
     sx, sy = food.x - camera[0], food.y - camera[1]
-    if not (-20 <= sx <= config.WIDTH + 20 and -20 <= sy <= config.HEIGHT + 20):
+    if not (-40 <= sx <= config.WIDTH + 40 and -40 <= sy <= config.HEIGHT + 40):
         return
-    fade = 1.0 if food.life > 5.0 else max(0.25, food.life / 5.0)
-    color = tuple(int(c * fade) for c in config.FOOD_COLOR)
-    draw_hex(surface, (sx, sy), config.HEX_SIZE * 0.6, color)
+    fade = min(1.0, max(0.25, food.life / config.FOOD_FADE_TIME))
+    color = tuple(int(c * fade) for c in food.color)
+    draw_hex(surface, (sx, sy), config.HEX_SIZE, color, food.angle)
+
+    if food.kind == THRUSTER:
+        dx, dy = hexgrid.direction_vector(food.direction)
+        wdx = dx * math.cos(food.angle) - dy * math.sin(food.angle)
+        wdy = dx * math.sin(food.angle) + dy * math.cos(food.angle)
+        tip = (sx + wdx * config.HEX_SIZE * 0.9, sy + wdy * config.HEX_SIZE * 0.9)
+        pygame.draw.line(surface, config.OUTLINE_COLOR, (sx, sy), tip, 2)
 
 
 def camera_for(world: World) -> tuple[float, float]:

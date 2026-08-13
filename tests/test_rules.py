@@ -14,7 +14,7 @@ from evolution.creature import (
     Creature,
     default_blueprint,
 )
-from evolution.world import World
+from evolution.world import Food, World
 
 
 def line_blueprint(length: int) -> Blueprint:
@@ -75,6 +75,30 @@ def test_water_stops_the_creature() -> None:
     for _ in range(240):
         creature.step(1 / 60)
     assert math.hypot(creature.vx, creature.vy) < 20.0
+
+
+def test_dropped_cells_keep_their_look() -> None:
+    bp = Blueprint()
+    bp.place(CellSpec((1, 0), THRUSTER, direction=0, group=1))
+    world = World(default_blueprint(), seed=3)
+
+    enemy = Creature(blueprint=bp, x=400.0, y=400.0)
+    world.drop_food(enemy, [ROOT, (1, 0)])
+    by_color = {food.color for food in world.foods}
+    assert by_color == {config.CORE_COLOR, config.ENEMY_THRUSTER_COLOR}
+    thruster_food = next(f for f in world.foods if f.kind == THRUSTER)
+    assert thruster_food.direction == 0
+
+    world.foods.clear()
+    player = Creature(blueprint=line_blueprint(2), x=400.0, y=400.0, is_player=True)
+    world.drop_food(player, [(1, 0)])
+    assert world.foods[0].color == config.SKIN_COLOR
+
+
+def test_dropped_cell_keeps_spinning() -> None:
+    piece = Food(x=100.0, y=100.0, vx=0.0, vy=0.0, spin=4.0)
+    piece.step(1 / 60)
+    assert piece.angle > 0.0
 
 
 def test_world_runs_and_fight_happens() -> None:

@@ -111,6 +111,15 @@ def connected_from(coords: set[Coord], start: Coord) -> set[Coord]:
     return seen
 
 
+def cell_color(coord: Coord, spec: CellSpec, is_player: bool = True) -> tuple[int, int, int]:
+    """Цвет клетки: ядро, двигатель или кожа — своя палитра у игрока и у врага."""
+    if coord == ROOT:
+        return config.CORE_COLOR
+    if spec.kind == THRUSTER:
+        return config.THRUSTER_COLOR if is_player else config.ENEMY_THRUSTER_COLOR
+    return config.SKIN_COLOR if is_player else config.ENEMY_SKIN_COLOR
+
+
 def default_blueprint() -> Blueprint:
     """Простое существо на случай, если игрок ещё ничего не собирал."""
     bp = Blueprint()

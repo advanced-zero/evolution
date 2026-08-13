@@ -7,25 +7,36 @@ import random
 from dataclasses import dataclass
 
 from evolution import ai, config, physics
-from evolution.creature import Blueprint, Creature
+from evolution.creature import SKIN, Blueprint, Creature, cell_color
 
 
 @dataclass
 class Food:
-    """Отбитая клетка, которая плавает в воде и лечит того, кто её подберёт."""
+    """Отбитая клетка, которая плавает в воде и лечит того, кто её подберёт.
+
+    Обломок выглядит ровно так, как выглядела клетка до отрыва, и по инерции
+    продолжает крутиться.
+    """
 
     x: float
     y: float
     vx: float
     vy: float
+    color: tuple[int, int, int] = config.FOOD_COLOR
+    angle: float = 0.0
+    spin: float = 0.0
+    kind: str = SKIN
+    direction: int = 0
     life: float = config.FOOD_LIFETIME
 
     def step(self, dt: float) -> None:
         damping = math.exp(-config.FOOD_DRAG * dt)
         self.vx *= damping
         self.vy *= damping
+        self.spin *= math.exp(-config.ANGULAR_DRAG * dt)
         self.x = min(max(self.x + self.vx * dt, 0.0), config.WORLD_WIDTH)
         self.y = min(max(self.y + self.vy * dt, 0.0), config.WORLD_HEIGHT)
+        self.angle += self.spin * dt
         self.life -= dt
 
 
@@ -71,12 +82,18 @@ class World:
     def drop_food(self, creature: Creature, coords: list[tuple[int, int]]) -> None:
         for coord in coords:
             x, y = creature.cell_world_pos(coord)
+            spec = creature.blueprint.cells[coord]
             self.foods.append(
                 Food(
                     x=x,
                     y=y,
                     vx=creature.vx * 0.4 + self.rng.uniform(-90.0, 90.0),
                     vy=creature.vy * 0.4 + self.rng.uniform(-90.0, 90.0),
+                    color=cell_color(coord, spec, creature.is_player),
+                    angle=creature.angle,
+                    spin=creature.spin + self.rng.uniform(-2.5, 2.5),
+                    kind=spec.kind,
+                    direction=spec.direction,
                 )
             )
 
