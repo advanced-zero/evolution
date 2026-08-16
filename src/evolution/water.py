@@ -46,6 +46,55 @@ def _hash01(a: int, b: int, salt: int) -> float:
     return h / 0xFFFFFFFF
 
 
+def _caustic_tile(rng: random.Random, zoom: float) -> pygame.Surface:
+    """Плитка солнечной паутины: светлые нити по границам ячеек.
+
+    Считаем расстояние до двух ближайших точек: у границы между ячейками они
+    почти равны — там и загорается нить. Точки заворачиваются по краям плитки,
+    поэтому плитка стыкуется сама с собой без швов.
+    """
+    size = config.WATER_CAUSTIC_TILE
+    cells = config.WATER_CAUSTIC_CELLS
+    step = size / cells
+    points = [
+        [
+            (
+                (cx + rng.random()) * step,
+                (cy + rng.random()) * step,
+            )
+            for cx in range(cells)
+        ]
+        for cy in range(cells)
+    ]
+
+    tile = pygame.Surface((size, size))
+    width = config.WATER_CAUSTIC_WIDTH * step
+    for py in range(size):
+        cy = int(py / step)
+        for px in range(size):
+            cx = int(px / step)
+            first = second = float("inf")
+            for oy in range(-1, 2):
+                row = points[(cy + oy) % cells]
+                shift_y = ((cy + oy) // cells) * size
+                for ox in range(-1, 2):
+                    qx, qy = row[(cx + ox) % cells]
+                    qx += ((cx + ox) // cells) * size
+                    qy += shift_y
+                    d = (qx - px) ** 2 + (qy - py) ** 2
+                    if d < first:
+                        first, second = d, first
+                    elif d < second:
+                        second = d
+            edge = math.sqrt(second) - math.sqrt(first)
+            glow = max(0.0, 1.0 - edge / width) ** 2
+            level = int(config.WATER_CAUSTIC_BRIGHT * glow)
+            tile.set_at((px, py), (level, level, level))
+
+    span = int(size * zoom)
+    return pygame.transform.smoothscale(tile, (span, span))
+
+
 def _mix(
     dark: tuple[int, int, int], light: tuple[int, int, int], t: float
 ) -> tuple[int, int, int]:
@@ -123,7 +172,26 @@ class _Water:
                 big, (big.get_width() * 2, big.get_height() * 2)
             )
         big = pygame.transform.smoothscale(big, (config.WORLD_WIDTH, config.WORLD_HEIGHT))
+        self._bake_caustics(big, rng)
         return big.convert() if pygame.display.get_init() else big
+
+    def _bake_caustics(self, sea: pygame.Surface, rng: random.Random) -> None:
+        """Вклеивает в карту солнечную паутину — сразу, а не каждый кадр.
+
+        Сетка привязана к месту: когда плывёшь, она проезжает мимо, как в воде.
+        Умножение на саму воду гасит нити на глубине и разжигает на отмелях.
+        """
+        layer = pygame.Surface(sea.get_size())
+        # два слоя разного размера: одна плитка на весь мир читалась бы как
+        # повторяющиеся обои, а вдвоём они сбивают этот повтор
+        for zoom in config.WATER_CAUSTIC_ZOOM:
+            tile = _caustic_tile(rng, zoom)
+            span = tile.get_width()
+            for y in range(0, sea.get_height(), span):
+                for x in range(0, sea.get_width(), span):
+                    layer.blit(tile, (x, y), special_flags=pygame.BLEND_RGB_ADD)
+        layer.blit(sea, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+        sea.blit(layer, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
 
     # где вода шевелится, а где стоит — своё, независимое от цвета поле
     def _build_lively(self, rng: random.Random) -> list[list[float]]:
@@ -168,25 +236,36 @@ class _Water:
             for k in (0.6, 0.85, 1.0)
         ]
 
-    # планктон разложен в плитке 2×2 экрана и повторяется по модулю
+    # планктон ходит стайками; плитка 2×2 экрана повторяется по модулю
     def _build_motes(
         self, rng: random.Random
-    ) -> list[tuple[float, float, float, float, tuple[int, int, int], int]]:
+    ) -> list[tuple[float, float, float, float, tuple[int, int, int], int, float]]:
         tw, th = config.WIDTH * 2, config.HEIGHT * 2
         drift = config.WATER_MOTE_DRIFT
+        low, high = config.WATER_SCHOOL_SIZE
+        spread = config.WATER_SCHOOL_RADIUS
         motes = []
-        for _ in range(config.WATER_MOTE_COUNT):
-            shade = rng.uniform(0.35, 1.0)
-            motes.append(
-                (
-                    rng.uniform(0.0, tw),
-                    rng.uniform(0.0, th),
-                    rng.uniform(-drift, drift),
-                    rng.uniform(-drift, drift),
-                    tuple(int(c * shade) for c in config.WATER_MOTE_COLOR),
-                    1 if shade < 0.75 else 2,
+        while len(motes) < config.WATER_MOTE_COUNT:
+            # стайку сносит целиком: своя скорость только чуть-чуть разная,
+            # иначе крупинки разбредутся и никакой стайки не выйдет
+            cx, cy = rng.uniform(0.0, tw), rng.uniform(0.0, th)
+            vx, vy = rng.uniform(-drift, drift), rng.uniform(-drift, drift)
+            for _ in range(rng.randint(low, high)):
+                shade = rng.uniform(0.3, 1.0)
+                # к середине стайки крупинки жмутся плотнее
+                r = spread * rng.random() ** 1.6
+                a = rng.uniform(0.0, math.tau)
+                motes.append(
+                    (
+                        cx + math.cos(a) * r,
+                        cy + math.sin(a) * r,
+                        vx + rng.uniform(-0.4, 0.4),
+                        vy + rng.uniform(-0.4, 0.4),
+                        tuple(int(c * shade) for c in config.WATER_MOTE_COLOR),
+                        1 if shade < 0.7 else 2,
+                        rng.uniform(0.0, math.tau),
+                    )
                 )
-            )
         return motes
 
     def _build_bubbles(self, rng: random.Random) -> list[tuple[float, float]]:
@@ -274,14 +353,16 @@ def _draw_shimmer(
 def _draw_motes(
     surface: pygame.Surface, water: _Water, cx: float, cy: float, time: float, calm: bool
 ) -> None:
-    """Крупинки взвеси: по ним видно, что плывёшь."""
+    """Стайки взвеси: по ним видно, что плывёшь."""
     tw, th = config.WIDTH * 2, config.HEIGHT * 2
+    wobble = config.WATER_MOTE_WOBBLE
     count = len(water.motes)
     if calm:
         count = int(count * config.WATER_CALM_MOTES)
-    for x0, y0, vx, vy, color, size in water.motes[:count]:
-        sx = (x0 + vx * time - cx) % tw
-        sy = (y0 + vy * time - cy) % th
+    for x0, y0, vx, vy, color, size, phase in water.motes[:count]:
+        # крупинка ещё и покачивается на месте — стайка выглядит живой
+        sx = (x0 + vx * time + math.sin(time * 0.9 + phase) * wobble - cx) % tw
+        sy = (y0 + vy * time + math.cos(time * 0.7 + phase) * wobble - cy) % th
         if sx < config.WIDTH and sy < config.HEIGHT:
             surface.fill(color, (sx, sy, size, size))
 

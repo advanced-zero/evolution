@@ -46,6 +46,7 @@ HELP_LINES = [
     "1..9 — кнопка двигателя или мышцы",
     "Мышца: клик по клетке, потом по второй",
     "колесо — сила мышцы, ПКМ — снять",
+    "Стрелки или средняя кнопка мыши — прокрутка вида",
     "Enter — играть",
     "Esc — выход",
 ]
@@ -64,7 +65,9 @@ class EditorScene:
         self.strength = 5  # сила мышцы, крутится колёсиком
         self.muscle_start: Coord | None = None  # первый конец начатой мышцы
         self.last_score = last_score
-        self.grid = hexgrid.spiral(config.EDITOR_RADIUS)
+        self.pan = [0.0, 0.0]  # смещение камеры редактора относительно ORIGIN
+        self._dragging = False
+        self._drag_anchor: tuple[int, int] | None = None
         self.font = render.get_font(20)
         self.big_font = render.get_font(34, bold=True)
         self.time = 0.0
@@ -74,6 +77,11 @@ class EditorScene:
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 2:
+                # средняя кнопка — перетаскивание вида, не ставит клетку
+                self._dragging = True
+                self._drag_anchor = event.pos
+                return
             coord = self._coord_at(event.pos)
             if event.button == 1:
                 self._place_muscle(coord) if self.kind == MUSCLE else self._place(coord)
@@ -88,6 +96,17 @@ class EditorScene:
                     )
                 else:
                     self.direction = (self.direction + step) % 6
+
+        elif event.type == pygame.MOUSEBUTTONUP:
+            if event.button == 2:
+                self._dragging = False
+                self._drag_anchor = None
+
+        elif event.type == pygame.MOUSEMOTION:
+            if self._dragging and self._drag_anchor is not None:
+                self.pan[0] += event.pos[0] - self._drag_anchor[0]
+                self.pan[1] += event.pos[1] - self._drag_anchor[1]
+                self._drag_anchor = event.pos
 
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_TAB:
@@ -104,12 +123,14 @@ class EditorScene:
             elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 self._start_game()
 
+    def _origin(self) -> tuple[float, float]:
+        return ORIGIN[0] + self.pan[0], ORIGIN[1] + self.pan[1]
+
     def _coord_at(self, pos: tuple[int, int]) -> Coord:
-        return hexgrid.pixel_to_hex(pos[0] - ORIGIN[0], pos[1] - ORIGIN[1], config.EDITOR_HEX_SIZE)
+        ox, oy = self._origin()
+        return hexgrid.pixel_to_hex(pos[0] - ox, pos[1] - oy, config.EDITOR_HEX_SIZE)
 
     def _place(self, coord: Coord) -> None:
-        if hexgrid.distance(ROOT, coord) > config.EDITOR_RADIUS:
-            return
         existing = self.blueprint.cells.get(coord)
         if existing is not None:
             # клик по уже стоящей клетке перестраивает её в выбранный вид
@@ -164,18 +185,49 @@ class EditorScene:
 
     def update(self, dt: float):
         self.time += dt
+        keys = pygame.key.get_pressed()
+        move = config.EDITOR_PAN_SPEED * dt
+        if keys[pygame.K_LEFT]:
+            self.pan[0] += move
+        if keys[pygame.K_RIGHT]:
+            self.pan[0] -= move
+        if keys[pygame.K_UP]:
+            self.pan[1] += move
+        if keys[pygame.K_DOWN]:
+            self.pan[1] -= move
         scene, self.next_scene = self.next_scene, None
         return scene
 
     # --- отрисовка ---
 
+    def _visible_coords(self) -> list[Coord]:
+        """Гексы, видимые в области редактора сейчас: сетка не ограничена
+        кольцами, поэтому вместо заранее посчитанного списка каждый кадр
+        считаем прямоугольник координат, покрывающий текущий вид камеры.
+        """
+        ox, oy = self._origin()
+        size = config.EDITOR_HEX_SIZE
+        corners = [(0, 0), (PANEL_X - 20, 0), (0, config.HEIGHT), (PANEL_X - 20, config.HEIGHT)]
+        qs, rs = [], []
+        for x, y in corners:
+            q, r = hexgrid.pixel_to_hex(x - ox, y - oy, size)
+            qs.append(q)
+            rs.append(r)
+        pad = 1
+        return [
+            (q, r)
+            for q in range(min(qs) - pad, max(qs) + pad + 1)
+            for r in range(min(rs) - pad, max(rs) + pad + 1)
+        ]
+
     def draw(self, surface: pygame.Surface) -> None:
         render.draw_background(surface, render.calm_camera(self.time), self.time, calm=True)
         size = config.EDITOR_HEX_SIZE
+        ox, oy = self._origin()
 
-        for coord in self.grid:
+        for coord in self._visible_coords():
             px, py = hexgrid.hex_to_pixel(coord, size)
-            center = (ORIGIN[0] + px, ORIGIN[1] + py)
+            center = (ox + px, oy + py)
             spec = self.blueprint.cells.get(coord)
             if spec is None:
                 color = config.BORDER_COLOR if self.blueprint.can_place(coord) else config.GRID_COLOR
@@ -191,8 +243,9 @@ class EditorScene:
         self._draw_panel(surface)
 
     def _cell_center(self, coord: Coord, size: float) -> tuple[float, float]:
+        ox, oy = self._origin()
         px, py = hexgrid.hex_to_pixel(coord, size)
-        return ORIGIN[0] + px, ORIGIN[1] + py
+        return ox + px, oy + py
 
     def _draw_muscles(self, surface: pygame.Surface, size: float) -> None:
         """Мышцы — верёвки поверх тела; толщина показывает силу."""
