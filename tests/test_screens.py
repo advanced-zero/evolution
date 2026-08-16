@@ -62,6 +62,26 @@ def test_full_loop() -> None:
     again.draw(screen)
 
 
+def test_water_draws_anywhere() -> None:
+    """Фон рисуется в любой точке мира и в любой момент времени."""
+    screen = _screen()
+    from evolution import water
+
+    first = water.prepare()
+    assert water.prepare() is first, "карта воды должна строиться один раз"
+
+    corners = [
+        (-config.WIDTH, -config.HEIGHT),  # камера целиком за краем мира
+        (-20.0, -20.0),
+        (config.WORLD_WIDTH / 2, config.WORLD_HEIGHT / 2),
+        (config.WORLD_WIDTH, config.WORLD_HEIGHT),
+    ]
+    for camera in corners:
+        for moment in (0.0, 40.0):
+            water.draw(screen, camera, moment)
+            water.draw(screen, camera, moment, calm=True)
+
+
 if __name__ == "__main__":
     for name, func in sorted(globals().items()):
         if name.startswith("test_"):

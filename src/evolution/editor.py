@@ -5,18 +5,47 @@ from __future__ import annotations
 import pygame
 
 from evolution import config, creature, hexgrid, render
-from evolution.creature import ROOT, SKIN, THRUSTER, Blueprint, CellSpec, default_blueprint
+from evolution.creature import (
+    BONE,
+    KINDS,
+    PROCESSOR,
+    ROOT,
+    SKIN,
+    THRUSTER,
+    Blueprint,
+    CellSpec,
+    Muscle,
+    cell_color,
+    cell_cost,
+    cell_upkeep,
+    default_blueprint,
+)
 from evolution.hexgrid import Coord
 
 ORIGIN = (config.WIDTH * 0.36, config.HEIGHT * 0.5)
 PANEL_X = config.WIDTH - 420
 
+MUSCLE = "muscle"
+"""Особый режим редактора: ставим не клетку, а верёвку между двумя клетками."""
+
+MODES = (*KINDS, MUSCLE)
+
+KIND_NAMES = {
+    SKIN: "кожа",
+    BONE: "кость",
+    THRUSTER: "двигатель",
+    PROCESSOR: "переработчик",
+    MUSCLE: "мышца",
+}
+
 HELP_LINES = [
     "ЛКМ — поставить клетку",
     "ПКМ — убрать клетку",
-    "Tab — кожа / двигатель",
-    "Q, E или колесо — повернуть",
-    "1..9 — кнопка двигателя",
+    "Tab — сменить, что ставим",
+    "Q, E или колесо — повернуть двигатель",
+    "1..9 — кнопка двигателя или мышцы",
+    "Мышца: клик по клетке, потом по второй",
+    "колесо — сила мышцы, ПКМ — снять",
     "Enter — играть",
     "Esc — выход",
 ]
@@ -32,10 +61,13 @@ class EditorScene:
         self.kind = THRUSTER
         self.direction = 0
         self.group = 1
+        self.strength = 5  # сила мышцы, крутится колёсиком
+        self.muscle_start: Coord | None = None  # первый конец начатой мышцы
         self.last_score = last_score
         self.grid = hexgrid.spiral(config.EDITOR_RADIUS)
         self.font = render.get_font(20)
         self.big_font = render.get_font(34, bold=True)
+        self.time = 0.0
         self.next_scene = None
 
     # --- ввод ---
@@ -44,24 +76,31 @@ class EditorScene:
         if event.type == pygame.MOUSEBUTTONDOWN:
             coord = self._coord_at(event.pos)
             if event.button == 1:
-                self._place(coord)
+                self._place_muscle(coord) if self.kind == MUSCLE else self._place(coord)
             elif event.button == 3:
-                self.blueprint.remove(coord)
-            elif event.button == 4:
-                self.direction = (self.direction + 1) % 6
-            elif event.button == 5:
-                self.direction = (self.direction - 1) % 6
+                self._erase(coord)
+            elif event.button in (4, 5):
+                step = 1 if event.button == 4 else -1
+                if self.kind == MUSCLE:
+                    # колёсико крутит силу мышцы, а не поворот двигателя
+                    self.strength = max(
+                        1, min(config.MUSCLE_MAX_STRENGTH, self.strength + step)
+                    )
+                else:
+                    self.direction = (self.direction + step) % 6
 
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_TAB:
-                self.kind = SKIN if self.kind == THRUSTER else THRUSTER
+                self.kind = MODES[(MODES.index(self.kind) + 1) % len(MODES)]
+                self.muscle_start = None
             elif event.key in (pygame.K_q,):
                 self.direction = (self.direction - 1) % 6
             elif event.key in (pygame.K_e,):
                 self.direction = (self.direction + 1) % 6
             elif pygame.K_1 <= event.key <= pygame.K_9:
                 self.group = event.key - pygame.K_0
-                self.kind = THRUSTER
+                if self.kind not in (THRUSTER, MUSCLE):
+                    self.kind = THRUSTER
             elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 self._start_game()
 
@@ -73,15 +112,47 @@ class EditorScene:
             return
         existing = self.blueprint.cells.get(coord)
         if existing is not None:
-            # клик по уже стоящему двигателю перенастраивает его
-            if self.kind == THRUSTER and coord != ROOT:
-                existing.kind = THRUSTER
+            # клик по уже стоящей клетке перестраивает её в выбранный вид
+            if coord == ROOT:
+                return
+            extra = cell_cost(self.kind) - cell_cost(existing.kind)
+            if self.blueprint.cost() + extra > config.CELL_BUDGET:
+                return
+            existing.kind = self.kind
+            if self.kind == THRUSTER:
                 existing.direction = self.direction
                 existing.group = self.group
             return
-        if len(self.blueprint) >= config.CELL_BUDGET:
+        if self.blueprint.cost() + cell_cost(self.kind) > config.CELL_BUDGET:
             return
         self.blueprint.place(CellSpec(coord, self.kind, self.direction, self.group))
+
+    def _place_muscle(self, coord: Coord) -> None:
+        """Первый клик задаёт один конец верёвки, второй — другой."""
+        if coord not in self.blueprint.cells:
+            return
+        if self.muscle_start is None:
+            self.muscle_start = coord
+            return
+        if coord == self.muscle_start:
+            self.muscle_start = None  # ткнули туда же — передумали
+            return
+        muscle = Muscle(self.muscle_start, coord, self.group, self.strength)
+        if self.blueprint.cost() + muscle.cost() <= config.CELL_BUDGET:
+            self.blueprint.add_muscle(muscle)
+        self.muscle_start = None
+
+    def _erase(self, coord: Coord) -> None:
+        """ПКМ: в режиме мышцы снимает верёвку, иначе убирает клетку."""
+        if self.kind == MUSCLE:
+            if self.muscle_start is not None:
+                self.muscle_start = None
+                return
+            for muscle in self.blueprint.muscles_at(coord):
+                self.blueprint.muscles.remove(muscle)
+                return
+            return
+        self.blueprint.remove(coord)
 
     def _start_game(self) -> None:
         from evolution.scenes import PlayScene  # поздний импорт: экраны ссылаются друг на друга
@@ -92,13 +163,14 @@ class EditorScene:
     # --- игровой цикл ---
 
     def update(self, dt: float):
+        self.time += dt
         scene, self.next_scene = self.next_scene, None
         return scene
 
     # --- отрисовка ---
 
     def draw(self, surface: pygame.Surface) -> None:
-        surface.fill(config.BG_COLOR)
+        render.draw_background(surface, render.calm_camera(self.time), self.time, calm=True)
         size = config.EDITOR_HEX_SIZE
 
         for coord in self.grid:
@@ -110,18 +182,33 @@ class EditorScene:
                 render.draw_hex(surface, center, size * 0.94, color, width=1)
                 continue
 
-            if coord == ROOT:
-                color = config.CORE_COLOR
-            elif spec.kind == THRUSTER:
-                color = config.THRUSTER_COLOR
-            else:
-                color = config.SKIN_COLOR
-            render.draw_hex(surface, center, size * 0.94, color)
+            render.draw_hex(surface, center, size * 0.94, cell_color(coord, spec))
 
             if spec.kind == THRUSTER:
                 self._draw_thruster_marks(surface, center, size, spec.direction, spec.group)
 
+        self._draw_muscles(surface, size)
         self._draw_panel(surface)
+
+    def _cell_center(self, coord: Coord, size: float) -> tuple[float, float]:
+        px, py = hexgrid.hex_to_pixel(coord, size)
+        return ORIGIN[0] + px, ORIGIN[1] + py
+
+    def _draw_muscles(self, surface: pygame.Surface, size: float) -> None:
+        """Мышцы — верёвки поверх тела; толщина показывает силу."""
+        for muscle in self.blueprint.muscles:
+            a = self._cell_center(muscle.a, size)
+            b = self._cell_center(muscle.b, size)
+            width = 2 + muscle.strength // 3
+            pygame.draw.line(surface, config.MUSCLE_COLOR, a, b, width)
+            middle = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+            label = self.font.render(f"{muscle.group}·{muscle.strength}", True, config.FG_COLOR)
+            surface.blit(label, label.get_rect(center=middle))
+
+        if self.muscle_start is not None:
+            # начатая мышца тянется за курсором
+            start = self._cell_center(self.muscle_start, size)
+            pygame.draw.line(surface, config.MUSCLE_COLOR, start, pygame.mouse.get_pos(), 2)
 
     def _draw_thruster_marks(
         self,
@@ -144,16 +231,73 @@ class EditorScene:
         surface.blit(title, (x, y))
         y += 50
 
-        used = len(self.blueprint)
+        used = self.blueprint.cost()
         color = config.FG_COLOR if used < config.CELL_BUDGET else (230, 130, 120)
         surface.blit(
-            self.font.render(f"Клеток: {used} / {config.CELL_BUDGET}", True, color), (x, y)
+            self.font.render(f"Очки: {used} / {config.CELL_BUDGET}", True, color), (x, y)
         )
+        y += 28
+        surface.blit(
+            self.font.render(
+                f"Клеток: {len(self.blueprint)}   (кость стоит {cell_cost(BONE)})",
+                True,
+                config.BORDER_COLOR,
+            ),
+            (x, y),
+        )
+        y += 28
+
+        # аппетит: сколько тело просит за один удар голода и какой у него бак
+        appetite = sum(
+            cell_upkeep(spec.kind, coord == ROOT)
+            for coord, spec in self.blueprint.cells.items()
+        )
+        surface.blit(
+            self.font.render(
+                f"Аппетит: {appetite:.0f}   бак: {appetite * config.ENERGY_RESERVE:.0f}",
+                True,
+                config.BORDER_COLOR,
+            ),
+            (x, y),
+        )
+        y += 28
+
+        # без переработчика существо не сможет добыть ни капли энергии
+        if not any(spec.kind == PROCESSOR for spec in self.blueprint.cells.values()):
+            surface.blit(
+                self.font.render("Без переработчика есть нечем!", True, (230, 130, 120)), (x, y)
+            )
         y += 34
 
-        kind_name = "двигатель" if self.kind == THRUSTER else "кожа"
-        surface.blit(self.font.render(f"Ставим: {kind_name}", True, config.FG_COLOR), (x, y))
+        surface.blit(
+            self.font.render(f"Ставим: {KIND_NAMES[self.kind]}", True, config.FG_COLOR), (x, y)
+        )
         y += 28
+        if self.kind == BONE:
+            surface.blit(
+                self.font.render("Не гнётся, держит удар и не ест", True, config.BORDER_COLOR),
+                (x, y),
+            )
+            y += 28
+        if self.kind == PROCESSOR:
+            surface.blit(
+                self.font.render("Топит обломки рядом и кормит тело", True, config.BORDER_COLOR),
+                (x, y),
+            )
+            y += 28
+        if self.kind == MUSCLE:
+            for line in (
+                f"Сила: {self.strength} (колесо)   кнопка: {self.group}",
+                f"Цена — по очку за клетку длины",
+                "Стягивает концы — тело выгибается дугой",
+            ):
+                surface.blit(self.font.render(line, True, config.BORDER_COLOR), (x, y))
+                y += 26
+            if self.muscle_start is not None:
+                surface.blit(
+                    self.font.render("Теперь укажи второй конец", True, config.FOOD_COLOR), (x, y)
+                )
+                y += 26
         if self.kind == THRUSTER:
             surface.blit(
                 self.font.render(f"Кнопка двигателя: {self.group}", True, config.FG_COLOR), (x, y)
