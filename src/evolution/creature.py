@@ -1040,6 +1040,15 @@ class Creature:
         if not self.alive_cells:
             return
         fx = fy = torque = 0.0
+        # Пока мышцы тянут, гребок плавника асимметричен: разгонять тело
+        # легче, чем тормозить или сдавать назад тем же взмахом. Без работы
+        # мышц вода ведёт себя как раньше — это только про сам гребок.
+        if self.pulling:
+            speed = math.hypot(self.vx, self.vy)
+            if speed > 1.0:
+                fwd_x, fwd_y = self.vx / speed, self.vy / speed
+            else:
+                fwd_x, fwd_y = rotate(1.0, 0.0, self.angle)
         for coord in self.alive_cells:
             vx, vy = self.cell_velocity(coord)
             if vx == 0.0 and vy == 0.0:
@@ -1051,6 +1060,14 @@ class Creature:
             # быстрый гребок цепляет воду сильнее, чем медленный возврат
             cross = math.hypot(cross_x, cross_y)
             cross_drag = config.WATER_CROSS_DRAG + config.WATER_QUAD_DRAG * cross
+            if self.pulling:
+                thrust_x, thrust_y = -cross_x * cross_drag, -cross_y * cross_drag
+                mult = (
+                    config.WATER_FIN_ACCEL_MULT
+                    if thrust_x * fwd_x + thrust_y * fwd_y > 0.0
+                    else config.WATER_FIN_BRAKE_MULT
+                )
+                cross_drag *= mult
             along_drag = config.WATER_ALONG_DRAG + config.WATER_QUAD_DRAG * abs(along)
             dfx = -(along * ax * along_drag + cross_x * cross_drag)
             dfy = -(along * ay * along_drag + cross_y * cross_drag)
