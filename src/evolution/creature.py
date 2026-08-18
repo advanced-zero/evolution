@@ -17,8 +17,9 @@ BONE = "bone"
 THRUSTER = "thruster"
 PROCESSOR = "processor"
 EYE = "eye"
+PHOTOSYNTH = "photosynth"
 
-KINDS = (SKIN, BONE, THRUSTER, PROCESSOR, EYE)
+KINDS = (SKIN, BONE, THRUSTER, PROCESSOR, EYE, PHOTOSYNTH)
 """Виды клеток в том порядке, в котором их перебирает редактор."""
 
 ROOT: Coord = (0, 0)
@@ -288,6 +289,8 @@ def cell_color(coord: Coord, spec: CellSpec, is_player: bool = True) -> tuple[in
         return config.PROCESSOR_COLOR if is_player else config.ENEMY_PROCESSOR_COLOR
     if spec.kind == EYE:
         return config.EYE_COLOR if is_player else config.ENEMY_EYE_COLOR
+    if spec.kind == PHOTOSYNTH:
+        return config.PHOTOSYNTH_COLOR if is_player else config.ENEMY_PHOTOSYNTH_COLOR
     if spec.kind == BONE:
         return config.BONE_COLOR if is_player else config.ENEMY_BONE_COLOR
     return config.SKIN_COLOR if is_player else config.ENEMY_SKIN_COLOR
@@ -360,6 +363,9 @@ class Creature:
     since_hunger: float = 0.0  # сколько секунд идёт нынешний интервал голода
     # наработка двигателей и переработчиков за нынешний интервал голода
     work_time: dict[Coord, float] = field(default_factory=dict)
+    # аппетит фотосинтезирующих клеток на нынешний интервал: бросок 0/1,
+    # свежий на каждый удар голода (см. reset_hunger)
+    photo_upkeep: dict[Coord, float] = field(default_factory=dict)
     repair_progress: float = 0.0
     processing: set[Coord] = field(default_factory=set)  # кто прямо сейчас топит обломок
 
@@ -824,6 +830,11 @@ class Creature:
         self.since_hunger = 0.0
         self.work_time.clear()
         self.muscle_work.clear()
+        self.photo_upkeep = {
+            c: (1.0 if rng.random() < config.PHOTOSYNTH_UPKEEP_CHANCE else 0.0)
+            for c in self.alive_cells
+            if self.kind_of(c) == PHOTOSYNTH
+        }
 
     @property
     def hunger_due(self) -> bool:
@@ -837,6 +848,8 @@ class Creature:
         между «стояла» и «работала».
         """
         kind = self.kind_of(coord)
+        if kind == PHOTOSYNTH:
+            return self.photo_upkeep.get(coord, 0.0)
         demand = cell_upkeep(kind, coord == ROOT)
         if coord != ROOT and self.since_hunger > 0.0:
             extra = cell_work_upkeep(kind) - cell_upkeep(kind)
@@ -869,6 +882,10 @@ class Creature:
         Возвращает всё потерянное — из этого получится еда.
         """
         lost: list[Coord] = []
+        photo_count = sum(1 for c in self.alive_cells if self.kind_of(c) == PHOTOSYNTH)
+        if photo_count:
+            gain = config.PHOTOSYNTH_ENERGY_GAIN * photo_count
+            self.energy = min(self.max_energy, self.energy + gain)
         while self.energy < self.demand():
             victims = [c for c in self.alive_cells if c != ROOT]
             if not victims:

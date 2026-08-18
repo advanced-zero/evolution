@@ -9,6 +9,7 @@ from evolution.creature import (
     BONE,
     EYE,
     KINDS,
+    PHOTOSYNTH,
     PROCESSOR,
     ROOT,
     SKIN,
@@ -37,6 +38,7 @@ KIND_NAMES = {
     THRUSTER: "двигатель",
     PROCESSOR: "переработчик",
     EYE: "зрительная клетка",
+    PHOTOSYNTH: "фотосинтез",
     MUSCLE: "мышца",
 }
 
@@ -346,6 +348,13 @@ class EditorScene:
                 (x, y),
             )
             y += 28
+        if self.kind == PHOTOSYNTH:
+            for line in (
+                "Даёт энергию на каждом ударе голода",
+                "Но с шансом сама попросит энергию",
+            ):
+                surface.blit(self.font.render(line, True, config.BORDER_COLOR), (x, y))
+                y += 26
         if self.kind == MUSCLE:
             for line in (
                 f"Сила: {self.strength} (колесо)   кнопка: {self.group}",

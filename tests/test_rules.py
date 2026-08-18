@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import math
 
+import random
+
 from evolution import config, hexgrid, physics
 from evolution.creature import (
     BONE,
     EYE,
+    PHOTOSYNTH,
     PROCESSOR,
     ROOT,
     SKIN,
@@ -744,6 +747,34 @@ def test_working_thruster_costs_more() -> None:
 
     creature.work_time[(1, 0)] = 10.0
     assert creature.cell_demand((1, 0)) == config.THRUSTER_WORK_UPKEEP
+
+
+def test_photosynth_upkeep_is_fixed_within_an_interval() -> None:
+    """Аппетит фотоклетки — случайный бросок, но один и тот же весь удар голода."""
+    bp = Blueprint()
+    bp.place(CellSpec((1, 0), PHOTOSYNTH))
+    creature = Creature(blueprint=bp, rng=random.Random(0))
+    demand = creature.cell_demand((1, 0))
+    assert demand in (0.0, 1.0)
+    # повторные обращения в пределах того же удара голода дают тот же ответ
+    for _ in range(5):
+        assert creature.cell_demand((1, 0)) == demand
+
+
+def test_photosynth_feeds_the_body() -> None:
+    """Фотоклетка сама приносит энергию на каждом ударе голода."""
+    bp = Blueprint()
+    bp.place(CellSpec((1, 0), PHOTOSYNTH))
+    creature = Creature(blueprint=bp, rng=random.Random(0))
+    creature.energy = creature.max_energy * 0.5  # с запасом, чтобы никого не потерять
+    before = creature.energy
+    own_demand = creature.cell_demand((1, 0))
+    assert own_demand in (0.0, 1.0)
+    creature.starve()
+    gained = min(creature.max_energy, before + config.PHOTOSYNTH_ENERGY_GAIN) - before
+    expected = before + gained - (config.BRAIN_UPKEEP + own_demand)
+    assert creature.energy == expected
+    assert creature.alive_cells == {ROOT, (1, 0)}  # никого не потеряли
 
 
 def test_starving_body_sheds_the_farthest_cell() -> None:

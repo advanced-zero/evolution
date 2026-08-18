@@ -34,11 +34,13 @@ BONE_COLOR = (228, 230, 238)
 THRUSTER_COLOR = (200, 150, 70)
 PROCESSOR_COLOR = (120, 140, 210)
 EYE_COLOR = (140, 210, 225)
+PHOTOSYNTH_COLOR = (140, 210, 90)
 ENEMY_SKIN_COLOR = (180, 90, 100)
 ENEMY_BONE_COLOR = (206, 196, 200)
 ENEMY_THRUSTER_COLOR = (200, 130, 80)
 ENEMY_PROCESSOR_COLOR = (150, 110, 190)
 ENEMY_EYE_COLOR = (150, 90, 150)
+ENEMY_PHOTOSYNTH_COLOR = (140, 170, 90)
 CORE_COLOR = (240, 235, 150)
 FOOD_COLOR = (120, 200, 210)
 FLAME_COLOR = (255, 210, 120)
@@ -95,7 +97,7 @@ CELL_RADIUS = HEX_SIZE * 0.92  # радиус кружка для столкно
 CELL_MASS = 1.0  # кожа, двигатель и переработчик
 BONE_MASS = 2.6  # кость тяжелее: медленнее разгон, зато сильнее удар
 # цена клетки в очках постройки
-CELL_COST = {"skin": 1, "thruster": 1, "bone": 3, "processor": 1, "eye": 3}
+CELL_COST = {"skin": 1, "thruster": 1, "bone": 3, "processor": 1, "eye": 3, "photosynth": 1}
 
 # --- мягкое тело ---
 # Кожа гнётся, кость держит форму. Жёсткость — доля от 0 до 1: сколько
@@ -208,7 +210,14 @@ ENEMY_HUNGRY_RATIO = 0.5  # бак ниже этой доли — враг бр�
 FOOD_DRAG = 1.2
 FOOD_LIFETIME = 90.0  # через сколько секунд обломок растворяется сам по себе
 FOOD_FADE_TIME = 60.0  # сколько последних секунд жизни обломок постепенно гаснет
-FOOD_ENERGY = {"skin": 5.0, "thruster": 5.0, "bone": 15.0, "processor": 5.0, "eye": 15.0}
+FOOD_ENERGY = {
+    "skin": 5.0,
+    "thruster": 5.0,
+    "bone": 15.0,
+    "processor": 5.0,
+    "eye": 15.0,
+    "photosynth": 6.0,
+}
 BRAIN_FOOD_ENERGY = 30.0  # обломок мозга — самая жирная добыча
 PROCESS_RADIUS = HEX_STEP * 1.0  # в одном гексе от переработчика обломки тают быстрее
 COLLECT_RADIUS = HEX_STEP * 4.0  # в четырёх — с них снимается энергия
@@ -218,7 +227,14 @@ PROCESS_SPEEDUP = 5.0  # во столько раз быстрее, и это с
 # Голод бьёт не каждый кадр, а редкими ударами: раз в HUNGER_PERIOD клеток
 # просят своё, и на кого не хватило — тот отваливается.
 # расход за удар голода: кость и переработчик в покое не едят вовсе
-CELL_UPKEEP = {"skin": 1.0, "thruster": 1.0, "bone": 0.0, "processor": 0.0, "eye": 2.0}
+CELL_UPKEEP = {
+    "skin": 1.0,
+    "thruster": 1.0,
+    "bone": 0.0,
+    "processor": 0.0,
+    "eye": 2.0,
+    "photosynth": 0.3,  # среднее: см. PHOTOSYNTH_UPKEEP_CHANCE
+}
 BRAIN_UPKEEP = 3.0  # мозг ест больше любой обычной клетки
 THRUSTER_WORK_UPKEEP = 3.0  # двигатель, жёгший топливо весь удар голода
 PROCESSOR_WORK_UPKEEP = 1.0  # переработчик, топивший обломки весь удар голода
@@ -226,6 +242,11 @@ HUNGER_PERIOD_MIN = 15.0
 HUNGER_PERIOD_MAX = 30.0
 ENERGY_RESERVE = 5.0  # бак = аппетит тела × это (запас на столько ударов голода)
 REPAIR_RATE = 2.0  # клеток в секунду, пока держишь кнопку ремонта
+
+# фотосинтезирующая клетка: сама даёт энергию на каждом ударе голода, а её
+# собственный аппетит на этот же удар — случайный (см. Creature.reset_hunger)
+PHOTOSYNTH_ENERGY_GAIN = 1.0  # энергии даёт одна клетка за удар голода
+PHOTOSYNTH_UPKEEP_CHANCE = 0.3  # шанс, что она попросит 1 энергию вместо 0
 
 # --- редактор ---
 CELL_BUDGET = 50  # бюджет постройки в ОЧКАХ (кожа, двигатель и переработчик по 1, кость 3)
