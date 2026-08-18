@@ -7,7 +7,7 @@ import math
 import pygame
 
 from evolution import config, hexgrid, water
-from evolution.creature import PROCESSOR, THRUSTER, Creature, cell_color
+from evolution.creature import EYE, PROCESSOR, THRUSTER, Creature, cell_color
 from evolution.world import Food, World
 
 
@@ -138,6 +138,12 @@ def draw_creature(
             # «пасть»: тёмное кольцо в центре, чтобы отличать от кожи
             pygame.draw.circle(
                 surface, config.OUTLINE_COLOR, (int(sx), int(sy)), int(config.HEX_SIZE * 0.45), 2
+            )
+
+        if spec.kind == EYE:
+            # «зрачок» в центре, чтобы отличать от кожи
+            pygame.draw.circle(
+                surface, config.OUTLINE_COLOR, (int(sx), int(sy)), int(config.HEX_SIZE * 0.3)
             )
 
         if spec.kind == THRUSTER:

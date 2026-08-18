@@ -16,8 +16,9 @@ SKIN = "skin"
 BONE = "bone"
 THRUSTER = "thruster"
 PROCESSOR = "processor"
+EYE = "eye"
 
-KINDS = (SKIN, BONE, THRUSTER, PROCESSOR)
+KINDS = (SKIN, BONE, THRUSTER, PROCESSOR, EYE)
 """Виды клеток в том порядке, в котором их перебирает редактор."""
 
 ROOT: Coord = (0, 0)
@@ -285,6 +286,8 @@ def cell_color(coord: Coord, spec: CellSpec, is_player: bool = True) -> tuple[in
         return config.THRUSTER_COLOR if is_player else config.ENEMY_THRUSTER_COLOR
     if spec.kind == PROCESSOR:
         return config.PROCESSOR_COLOR if is_player else config.ENEMY_PROCESSOR_COLOR
+    if spec.kind == EYE:
+        return config.EYE_COLOR if is_player else config.ENEMY_EYE_COLOR
     if spec.kind == BONE:
         return config.BONE_COLOR if is_player else config.ENEMY_BONE_COLOR
     return config.SKIN_COLOR if is_player else config.ENEMY_SKIN_COLOR
@@ -433,6 +436,21 @@ class Creature:
         """Вектор от центра тяжести до клетки в мировых осях."""
         lx, ly = self.local_pos(coord)
         return rotate(lx, ly, self.angle)
+
+    def visual_extent(self) -> float:
+        """Насколько тело сейчас разбросано от центра тяжести — для камеры.
+
+        В отличие от `radius` (запас для физики столкновений на случай
+        наихудшего изгиба, включает `SOFT_MAX_OFFSET`), здесь только
+        фактическое положение клеток по чертежу плюс их собственный радиус.
+        """
+        if not self.alive_cells:
+            return config.HEX_SIZE
+        farthest = 0.0
+        for c in self.alive_cells:
+            px, py = hexgrid.hex_to_pixel(c, config.HEX_SIZE)
+            farthest = max(farthest, math.hypot(px - self.com_x, py - self.com_y))
+        return farthest + config.CELL_RADIUS
 
     def point_velocity(self, ox: float, oy: float) -> tuple[float, float]:
         """Скорость точки тела со смещением (ox, oy) от центра тяжести."""
@@ -701,6 +719,14 @@ class Creature:
             coord
             for coord, spec in self.blueprint.cells.items()
             if spec.kind == PROCESSOR and coord in self.alive_cells
+        ]
+
+    def eyes(self) -> list[Coord]:
+        """Живые зрительные клетки: каждая расширяет обзор камеры игрока."""
+        return [
+            coord
+            for coord, spec in self.blueprint.cells.items()
+            if spec.kind == EYE and coord in self.alive_cells
         ]
 
     # --- урон и лечение ---

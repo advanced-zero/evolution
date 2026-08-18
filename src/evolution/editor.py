@@ -7,6 +7,7 @@ import pygame
 from evolution import config, creature, hexgrid, render
 from evolution.creature import (
     BONE,
+    EYE,
     KINDS,
     PROCESSOR,
     ROOT,
@@ -35,6 +36,7 @@ KIND_NAMES = {
     BONE: "кость",
     THRUSTER: "двигатель",
     PROCESSOR: "переработчик",
+    EYE: "зрительная клетка",
     MUSCLE: "мышца",
 }
 
@@ -335,6 +337,12 @@ class EditorScene:
         if self.kind == PROCESSOR:
             surface.blit(
                 self.font.render("Топит обломки рядом и кормит тело", True, config.BORDER_COLOR),
+                (x, y),
+            )
+            y += 28
+        if self.kind == EYE:
+            surface.blit(
+                self.font.render("Пока жива — шире обзор камеры в бою", True, config.BORDER_COLOR),
                 (x, y),
             )
             y += 28

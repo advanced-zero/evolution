@@ -26,6 +26,8 @@ class PlayScene:
         self.small_font = render.get_font(16)
         self.death_delay = 0.0
         self.next_scene = None
+        self._world_surface: pygame.Surface | None = None
+        self._world_surface_size: tuple[int, int] | None = None
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.KEYDOWN and pygame.K_1 <= event.key <= pygame.K_9:
@@ -47,18 +49,41 @@ class PlayScene:
                 return GameOverScene(self.blueprint, self.world.kills)
         return None
 
-    def draw(self, surface: pygame.Surface) -> None:
-        camera = render.camera_for(self.world)
-        render.draw_background(surface, camera, self.world.time)
+    def _camera_zoom(self) -> float:
+        """Во сколько раз растянуть вид: меньше существо — сильнее приближение."""
+        diameter = self.world.player.visual_extent() * 2.0 * config.CAMERA_FIT_MARGIN
+        zoom = config.HEIGHT / diameter
+        zoom = min(config.CAMERA_ZOOM_MAX, max(config.CAMERA_ZOOM_MIN, zoom))
+        # живые зрительные клетки отдаляют камеру — виднее становится море вокруг
+        eye_bonus = 1.0 + config.CAMERA_EYE_ZOOM_BONUS * len(self.world.player.eyes())
+        return zoom / eye_bonus
 
-        for food in self.world.foods:
-            render.draw_food(surface, food, camera)
-        for enemy in self.world.enemies:
-            render.draw_creature(surface, enemy, camera)
-        if not self.world.player.is_dead:
-            render.draw_creature(
-                surface, self.world.player, camera, self.active_groups, self.small_font
-            )
+    def draw(self, surface: pygame.Surface) -> None:
+        zoom = self._camera_zoom()
+        size = (max(1, round(config.WIDTH / zoom)), max(1, round(config.HEIGHT / zoom)))
+        if size != self._world_surface_size:
+            self._world_surface = pygame.Surface(size)
+            self._world_surface_size = size
+        world_surface = self._world_surface
+
+        real_width, real_height = config.WIDTH, config.HEIGHT
+        config.WIDTH, config.HEIGHT = size
+        try:
+            camera = render.camera_for(self.world)
+            render.draw_background(world_surface, camera, self.world.time)
+
+            for food in self.world.foods:
+                render.draw_food(world_surface, food, camera)
+            for enemy in self.world.enemies:
+                render.draw_creature(world_surface, enemy, camera)
+            if not self.world.player.is_dead:
+                render.draw_creature(
+                    world_surface, self.world.player, camera, self.active_groups, self.small_font
+                )
+        finally:
+            config.WIDTH, config.HEIGHT = real_width, real_height
+
+        pygame.transform.smoothscale(world_surface, (real_width, real_height), surface)
 
         self._draw_hud(surface)
 

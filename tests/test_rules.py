@@ -7,6 +7,7 @@ import math
 from evolution import config, hexgrid, physics
 from evolution.creature import (
     BONE,
+    EYE,
     PROCESSOR,
     ROOT,
     SKIN,
@@ -923,6 +924,19 @@ def test_full_creature_wastes_what_it_processed() -> None:
 
     world._food(1 / 60)
     assert eater.energy == eater.max_energy
+
+
+def test_eye_cell_lost_in_combat_stops_counting() -> None:
+    """Живая зрительная клетка учитывается, выбитая — сразу пропадает из списка."""
+    bp = Blueprint()
+    bp.place(CellSpec((1, 0), EYE))
+    bp.place(CellSpec((1, -1), EYE))
+    creature = Creature(blueprint=bp)
+
+    assert set(creature.eyes()) == {(1, 0), (1, -1)}
+
+    creature.remove_cell((1, 0))
+    assert creature.eyes() == [(1, -1)]
 
 
 if __name__ == "__main__":
