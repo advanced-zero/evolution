@@ -139,6 +139,41 @@ def test_player_thruster_overheats_and_cools_down() -> None:
     assert creature.vx > vx_before_resume + 1.0  # после колдауна снова толкает
 
 
+def test_player_thruster_rapid_toggle_still_overheats() -> None:
+    """Частое дёрганье кнопки короткими паузами не должно спасать от перегрева."""
+    bp = Blueprint()
+    bp.place(CellSpec((-1, 0), THRUSTER, direction=0, group=1))
+    creature = Creature(blueprint=bp, x=500.0, y=500.0, is_player=True)
+    dt = 1 / 60
+    chunk = max(1, round(0.1 / dt))  # держим 0.1с, отпускаем 0.1с — короче THRUSTER_COOL_GRACE
+
+    held = True
+    overheated = False
+    for _ in range(600):  # с запасом на много циклов туда-сюда
+        for _ in range(chunk):
+            creature.apply_thrust({1} if held else set(), dt)
+            creature.step(dt)
+            if creature.thruster_cooldown.get(1, 0.0) > 0.0:
+                overheated = True
+                break
+        if overheated:
+            break
+        held = not held
+    assert overheated  # короткие паузы не должны спасать от колдауна
+
+    # а вот заметная пауза (дольше THRUSTER_COOL_GRACE) жар реально остужает
+    creature2 = Creature(blueprint=bp, x=500.0, y=500.0, is_player=True)
+    for _ in range(int(1.0 / dt)):  # держим секунду — жара накопилось, но не до перегрева
+        creature2.apply_thrust({1}, dt)
+        creature2.step(dt)
+    heat_before = creature2.thruster_heat.get(1, 0.0)
+    assert heat_before > 0.0
+    for _ in range(int((config.THRUSTER_COOL_GRACE + 0.3) / dt)):  # пауза длиннее грани
+        creature2.apply_thrust(set(), dt)
+        creature2.step(dt)
+    assert creature2.thruster_heat.get(1, 0.0) < heat_before
+
+
 def _delivered_thrust(blueprint: Blueprint, steps: int = 120) -> float:
     """Сколько толчка двигателя реально дошло до тела (масса × набранный ход)."""
     creature = Creature(blueprint=blueprint, x=1000.0, y=1000.0)

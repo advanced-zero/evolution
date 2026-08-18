@@ -378,6 +378,7 @@ class Creature:
     # перегрев двигателей — только у игрока, отдельно по каждой группе (кнопке)
     thruster_heat: dict[int, float] = field(default_factory=dict)  # 0..1
     thruster_cooldown: dict[int, float] = field(default_factory=dict)  # сек до конца колдауна
+    thruster_idle: dict[int, float] = field(default_factory=dict)  # сколько подряд группа не нажата
 
     def __post_init__(self) -> None:
         self.alive_cells = set(self.blueprint.cells)
@@ -1132,8 +1133,10 @@ class Creature:
                 cooldown = max(0.0, cooldown - dt)
                 self.thruster_cooldown[group] = cooldown
                 self.thruster_heat[group] = cooldown / config.THRUSTER_COOLDOWN_TIME
+                self.thruster_idle[group] = 0.0
                 active.discard(group)
             elif group in active:
+                self.thruster_idle[group] = 0.0
                 heat = self.thruster_heat.get(group, 0.0) + dt / config.THRUSTER_OVERHEAT_TIME
                 if heat >= 1.0:
                     self.thruster_heat[group] = 1.0
@@ -1142,9 +1145,14 @@ class Creature:
                 else:
                     self.thruster_heat[group] = heat
             else:
-                self.thruster_heat[group] = max(
-                    0.0, self.thruster_heat.get(group, 0.0) - dt / config.THRUSTER_COOL_RATE
-                )
+                # жар не начинает падать, пока пауза не стала заметной — иначе
+                # частое дёрганье кнопки вообще не даёт ему накопиться
+                idle = self.thruster_idle.get(group, 0.0) + dt
+                self.thruster_idle[group] = idle
+                if idle >= config.THRUSTER_COOL_GRACE:
+                    self.thruster_heat[group] = max(
+                        0.0, self.thruster_heat.get(group, 0.0) - dt / config.THRUSTER_COOL_RATE
+                    )
         return active
 
     def apply_thrust(self, active_groups: set[int], dt: float) -> None:
