@@ -375,6 +375,10 @@ class Creature:
     pulling: set[int] = field(default_factory=set)  # какие мышцы тянут прямо сейчас
     muscle_work: dict[int, float] = field(default_factory=dict)  # наработка мышц
 
+    # перегрев двигателей — только у игрока, отдельно по каждой группе (кнопке)
+    thruster_heat: dict[int, float] = field(default_factory=dict)  # 0..1
+    thruster_cooldown: dict[int, float] = field(default_factory=dict)  # сек до конца колдауна
+
     def __post_init__(self) -> None:
         self.alive_cells = set(self.blueprint.cells)
         self._recompute(keep_position=False)
@@ -1117,6 +1121,32 @@ class Creature:
         axis = math.atan2(sy, sx) / 2.0
         return rotate(math.cos(axis), math.sin(axis), self.angle)
 
+    def _thruster_heat_step(self, active_groups: set[int], dt: float) -> set[int]:
+        """Перегрев двигателей игрока: держишь кнопку долго — она копит жар
+        и ненадолго отключается, остальные кнопки это не трогает.
+        """
+        active = set(active_groups)
+        for group in {spec.group for spec in self.thrusters()}:
+            cooldown = self.thruster_cooldown.get(group, 0.0)
+            if cooldown > 0.0:
+                cooldown = max(0.0, cooldown - dt)
+                self.thruster_cooldown[group] = cooldown
+                self.thruster_heat[group] = cooldown / config.THRUSTER_COOLDOWN_TIME
+                active.discard(group)
+            elif group in active:
+                heat = self.thruster_heat.get(group, 0.0) + dt / config.THRUSTER_OVERHEAT_TIME
+                if heat >= 1.0:
+                    self.thruster_heat[group] = 1.0
+                    self.thruster_cooldown[group] = config.THRUSTER_COOLDOWN_TIME
+                    active.discard(group)  # перегрелась прямо сейчас — толчка в этом кадре нет
+                else:
+                    self.thruster_heat[group] = heat
+            else:
+                self.thruster_heat[group] = max(
+                    0.0, self.thruster_heat.get(group, 0.0) - dt / config.THRUSTER_COOL_RATE
+                )
+        return active
+
     def apply_thrust(self, active_groups: set[int], dt: float) -> None:
         """Толкает тело. Через мягкую ножку доходит не всё.
 
@@ -1124,6 +1154,9 @@ class Creature:
         веслом в киселе. Костяной скелет от мозга к двигателю передаёт толчок
         целиком, ради этого кость и ставят.
         """
+        if self.is_player:
+            active_groups = self._thruster_heat_step(active_groups, dt)
+        thrust_force = config.PLAYER_THRUST_FORCE if self.is_player else config.THRUST_FORCE
         fx = fy = torque = 0.0
         for spec in self.thrusters():
             if spec.group not in active_groups:
@@ -1134,8 +1167,8 @@ class Creature:
             self.work_time[spec.coord] = self.work_time.get(spec.coord, 0.0) + dt
 
             wx, wy = rotate(dx, dy, self.angle)
-            wx *= config.THRUST_FORCE * share
-            wy *= config.THRUST_FORCE * share
+            wx *= thrust_force * share
+            wy *= thrust_force * share
             ox, oy = self.cell_offset(spec.coord)
             fx += wx
             fy += wy
@@ -1144,7 +1177,7 @@ class Creature:
             vel = self.offset_vels.get(spec.coord)
             if vel is not None:
                 # непереданная часть уходит в изгиб — в местных осях тела
-                push = config.THRUST_FORCE * (1.0 - share) / cell_mass(spec.kind) * dt
+                push = thrust_force * (1.0 - share) / cell_mass(spec.kind) * dt
                 vel[0] += dx * push
                 vel[1] += dy * push
 

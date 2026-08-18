@@ -18,7 +18,6 @@ from evolution.creature import (
     Blueprint,
     CellSpec,
     Creature,
-    Muscle,
     cell_cost,
 )
 
@@ -27,22 +26,12 @@ TURN_LEFT = 2
 TURN_RIGHT = 3
 
 
-MUSCLE_LEFT = 4
-MUSCLE_RIGHT = 5
-
-
 def random_blueprint(points: int, rng: random.Random) -> Blueprint:
     """Случайное существо: комок клеток с двигателями по краям.
 
     `points` — бюджет постройки в очках, как у игрока. Часть врагов тратит
-    его на скелет и получается меньше, зато твёрже, а часть вырастает угрями
-    и плавает не тягой, а мышцами.
+    его на скелет и получается меньше, зато твёрже.
     """
-    if points >= 16 and rng.random() < config.ENEMY_EEL_CHANCE:
-        eel = eel_blueprint(points, rng)
-        if eel is not None:
-            return eel
-
     # очки на скелет откладываем заранее: со скелетом тело выходит мельче.
     # Костей не больше, чем позволяет размер, иначе от тела ничего не остаётся.
     bones = 0
@@ -74,53 +63,6 @@ def random_blueprint(points: int, rng: random.Random) -> Blueprint:
 
     if bones:
         _grow_bones(bp, bones)
-    _grow_processors(bp, rng)
-    return bp
-
-
-def eel_blueprint(points: int, rng: random.Random) -> Blueprint | None:
-    """Угорь: тело в два ряда и по мышце вдоль каждого бока.
-
-    Мышца гнёт тело только тогда, когда идёт вдоль бока, а не по середине, —
-    поэтому хребет отдельно, бока отдельно.
-    """
-    bp = Blueprint()
-    # какие соседи считаются «левым» и «правым» боком — определяем по картинке,
-    # а не по номерам направлений: так не запутаешься в осях
-    sides = sorted(hexgrid.neighbors((0, 0)), key=lambda c: hexgrid.hex_to_pixel(c, 1.0)[1])
-    left_step, right_step = sides[0], sides[-1]
-
-    spine = [(0, 0)]
-    left: list[tuple[int, int]] = []
-    right: list[tuple[int, int]] = []
-    # растим хребет с боками, пока хватает очков на тело и на две мышцы
-    while len(spine) < 7:
-        head = spine[-1]
-        nxt = (head[0] - 1, head[1])
-        l = (nxt[0] + left_step[0], nxt[1] + left_step[1])
-        r = (nxt[0] + right_step[0], nxt[1] + right_step[1])
-        if bp.cost() + 3 + 2 * len(spine) > points:
-            break
-        for coord in (nxt, l, r):
-            bp.place(CellSpec(coord, SKIN))
-        spine.append(nxt)
-        left.append(l)
-        right.append(r)
-
-    if len(left) < 2:
-        return None  # на угря не хватило — пусть будет обычное существо
-
-    # сильнее враг себе не ставит: чрезмерная мышца рвёт собственный хвост
-    strength = rng.randint(3, 6)
-    bp.add_muscle(Muscle(left[0], left[-1], MUSCLE_LEFT, strength))
-    bp.add_muscle(Muscle(right[0], right[-1], MUSCLE_RIGHT, strength))
-
-    # пара двигателей на всякий случай: одними мышцами далеко не уедешь
-    for coord in hexgrid.neighbors((0, 0)):
-        if bp.can_place(coord) and bp.cost() + cell_cost(THRUSTER) <= points:
-            bp.place(CellSpec(coord, THRUSTER, direction=0, group=FORWARD))
-            break
-
     _grow_processors(bp, rng)
     return bp
 
@@ -168,9 +110,9 @@ def _wrap(angle: float) -> float:
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
-def steer(creature: Creature, target_angle: float, phase: float = 0.0) -> set[int]:
+def steer(creature: Creature, target_angle: float) -> set[int]:
     """Какие кнопки нажать, чтобы повернуться в нужную сторону и поехать."""
-    active = _stroke(creature, target_angle, phase)
+    active: set[int] = set()
 
     effects = group_effects(creature)
     if not effects:
@@ -192,26 +134,6 @@ def steer(creature: Creature, target_angle: float, phase: float = 0.0) -> set[in
             active.add(best)
 
     return active
-
-
-def _stroke(creature: Creature, target_angle: float, phase: float) -> set[int]:
-    """Взмах хвостом: угорь жмёт мышцы боков попеременно, в такт.
-
-    Чтобы повернуть, он дольше держит мышцу нужной стороны — тело выгибается
-    в эту сторону и туда же уходит.
-    """
-    groups = sorted(creature.muscle_groups())
-    if not groups:
-        return set()
-
-    err = _wrap(target_angle - creature.angle) - creature.spin * 0.35
-    # перекос взмаха: в какую сторону поворачиваем, той стороне больше времени
-    bias = max(-0.35, min(0.35, err * 0.4))
-    beat = (phase % config.EEL_STROKE_PERIOD) / config.EEL_STROKE_PERIOD
-    left = beat < 0.5 + bias
-    half = groups[: max(1, len(groups) // 2)]
-    other = groups[max(1, len(groups) // 2) :] or half
-    return set(half if left else other)
 
 
 def _nearest_food(me: Creature, foods: list) -> object | None:
@@ -236,7 +158,6 @@ class EnemyBrain:
         )
         self.wander_timer = rng.uniform(2.0, 6.0)
         self.backoff_timer = 0.0
-        self.phase = rng.uniform(0.0, config.EEL_STROKE_PERIOD)  # такт взмаха хвостом
 
     def think(
         self,
@@ -247,7 +168,6 @@ class EnemyBrain:
     ) -> set[int]:
         self.wander_timer -= dt
         self.backoff_timer = max(0.0, self.backoff_timer - dt)
-        self.phase += dt
 
         beaten = len(me.alive_cells) < len(me.blueprint.cells) * config.ENEMY_FLEE_RATIO
         hungry = me.max_energy > 0.0 and me.energy < me.max_energy * config.ENEMY_HUNGRY_RATIO
@@ -258,13 +178,13 @@ class EnemyBrain:
             if distance < config.VISION_RADIUS:
                 # от тела осталась половина — не до драки, надо уносить мозг
                 if beaten:
-                    return steer(me, math.atan2(-dy, -dx), self.phase)
+                    return steer(me, math.atan2(-dy, -dx))
                 if distance < me.radius + player.radius + 40.0 and self.backoff_timer <= 0.0:
                     # слишком близко — отходим, чтобы снова разогнаться
                     self.backoff_timer = self.rng.uniform(0.7, 1.3)
                 if self.backoff_timer > 0.0:
-                    return steer(me, math.atan2(-dy, -dx), self.phase)
-                return steer(me, math.atan2(dy, dx), self.phase)
+                    return steer(me, math.atan2(-dy, -dx))
+                return steer(me, math.atan2(dy, dx))
 
         # голодному еда важнее прогулки — и залатать дырки тоже нужна энергия
         if (hungry or beaten) and foods:
@@ -274,7 +194,7 @@ class EnemyBrain:
                 # подошли вплотную — глушим двигатели и висим, пока не переварится
                 if math.hypot(dx, dy) < config.PROCESS_RADIUS * 2.0:
                     return set()
-                return steer(me, math.atan2(dy, dx), self.phase)
+                return steer(me, math.atan2(dy, dx))
 
         if self.wander_timer <= 0.0:
             self.wander_target = (
@@ -285,4 +205,4 @@ class EnemyBrain:
         tx, ty = self.wander_target
         if math.hypot(tx - me.x, ty - me.y) < 150.0:
             self.wander_timer = 0.0
-        return steer(me, math.atan2(ty - me.y, tx - me.x), self.phase)
+        return steer(me, math.atan2(ty - me.y, tx - me.x))

@@ -145,8 +145,10 @@ def draw_creature(
             wdx = dx * math.cos(a) - dy * math.sin(a)
             wdy = dx * math.sin(a) + dy * math.cos(a)
             tip = (sx + wdx * config.HEX_SIZE * 0.9, sy + wdy * config.HEX_SIZE * 0.9)
-            pygame.draw.line(surface, config.OUTLINE_COLOR, (sx, sy), tip, 2)
-            if spec.group in active_groups:
+            overheated = creature.thruster_cooldown.get(spec.group, 0.0) > 0.0
+            stick_color = config.ENERGY_LOW_COLOR if overheated else config.OUTLINE_COLOR
+            pygame.draw.line(surface, stick_color, (sx, sy), tip, 2)
+            if spec.group in active_groups and not overheated:
                 # «выхлоп» бьёт назад
                 flame = (sx - wdx * config.HEX_SIZE * 1.8, sy - wdy * config.HEX_SIZE * 1.8)
                 pygame.draw.line(surface, config.FLAME_COLOR, (sx, sy), flame, 3)

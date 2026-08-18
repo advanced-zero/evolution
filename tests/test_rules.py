@@ -109,6 +109,36 @@ def test_thruster_pushes_where_it_points() -> None:
     assert abs(creature.vy) < 1.0
 
 
+def test_player_thruster_overheats_and_cools_down() -> None:
+    """Игрок держит кнопку долго — двигатель уходит в колдаун, соседняя кнопка цела."""
+    bp = Blueprint()
+    bp.place(CellSpec((-1, 0), THRUSTER, direction=0, group=1))
+    bp.place(CellSpec((1, 0), THRUSTER, direction=0, group=2))
+    creature = Creature(blueprint=bp, x=500.0, y=500.0, is_player=True)
+    dt = 1 / 60
+    steps = int(config.THRUSTER_OVERHEAT_TIME / dt) + 5
+    for _ in range(steps):
+        creature.apply_thrust({1}, dt)
+        creature.step(dt)
+    assert creature.thruster_cooldown.get(1, 0.0) > 0.0
+    assert creature.thruster_heat.get(2, 0.0) == 0.0  # кнопку 2 не трогали — не грелась
+
+    vx_at_cooldown = creature.vx
+    for _ in range(30):
+        creature.apply_thrust({1}, dt)  # держим дальше — толчка быть не должно
+        creature.step(dt)
+    assert creature.vx <= vx_at_cooldown + 1.0
+
+    while creature.thruster_cooldown.get(1, 0.0) > 0.0:
+        creature.apply_thrust(set(), dt)
+        creature.step(dt)
+    vx_before_resume = creature.vx
+    for _ in range(30):
+        creature.apply_thrust({1}, dt)
+        creature.step(dt)
+    assert creature.vx > vx_before_resume + 1.0  # после колдауна снова толкает
+
+
 def _delivered_thrust(blueprint: Blueprint, steps: int = 120) -> float:
     """Сколько толчка двигателя реально дошло до тела (масса × набранный ход)."""
     creature = Creature(blueprint=blueprint, x=1000.0, y=1000.0)
@@ -508,7 +538,7 @@ def test_waving_tail_pushes_a_little() -> None:
     start = (creature.x, creature.y)
     t = 0.0
     while t < 6.0:
-        half = (t % config.EEL_STROKE_PERIOD) < config.EEL_STROKE_PERIOD / 2
+        half = (t % config.MUSCLE_STROKE_PERIOD) < config.MUSCLE_STROKE_PERIOD / 2
         creature.apply_muscles({1} if half else {2}, 1 / 60)
         creature.step(1 / 60)
         t += 1 / 60
