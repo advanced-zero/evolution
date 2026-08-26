@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 from evolution import config
-from evolution.creature import BONE, Creature
+from evolution.creature import BONE, PHOTOSYNTH, Creature
 from evolution.hexgrid import Coord
 
 Hit = tuple[Creature, Coord]
@@ -140,6 +140,9 @@ def _ram_bonus(creature: Creature, coord: Coord) -> float:
 
 def _toughness(creature: Creature, coord: Coord) -> float:
     """Во сколько раз сильнее должен быть удар, чтобы выбить эту клетку."""
-    if creature.blueprint.cells[coord].kind == BONE:
+    kind = creature.blueprint.cells[coord].kind
+    if kind == BONE:
         return config.BONE_TOUGHNESS
+    if kind == PHOTOSYNTH:
+        return config.PHOTOSYNTH_TOUGHNESS
     return 1.0
