@@ -332,19 +332,19 @@ class EditorScene:
         y += 28
         if self.kind == BONE:
             surface.blit(
-                self.font.render("Не гнётся, держит удар и не ест", True, config.BORDER_COLOR),
+                self.font.render("Не гнётся, держит удар и не ест", True, config.FG_COLOR),
                 (x, y),
             )
             y += 28
         if self.kind == PROCESSOR:
             surface.blit(
-                self.font.render("Топит обломки рядом и кормит тело", True, config.BORDER_COLOR),
+                self.font.render("Топит обломки рядом и кормит тело", True, config.FG_COLOR),
                 (x, y),
             )
             y += 28
         if self.kind == EYE:
             surface.blit(
-                self.font.render("Пока жива — шире обзор камеры в бою", True, config.BORDER_COLOR),
+                self.font.render("Пока жива — шире обзор камеры в бою", True, config.FG_COLOR),
                 (x, y),
             )
             y += 28
@@ -353,7 +353,7 @@ class EditorScene:
                 "Даёт энергию на каждом ударе голода",
                 "Но с шансом сама попросит энергию",
             ):
-                surface.blit(self.font.render(line, True, config.BORDER_COLOR), (x, y))
+                surface.blit(self.font.render(line, True, config.FG_COLOR), (x, y))
                 y += 26
         if self.kind == MUSCLE:
             for line in (
@@ -361,7 +361,7 @@ class EditorScene:
                 f"Цена — по очку за клетку длины",
                 "Стягивает концы — тело выгибается дугой",
             ):
-                surface.blit(self.font.render(line, True, config.BORDER_COLOR), (x, y))
+                surface.blit(self.font.render(line, True, config.FG_COLOR), (x, y))
                 y += 26
             if self.muscle_start is not None:
                 surface.blit(
@@ -379,7 +379,7 @@ class EditorScene:
 
         y += 10
         for line in HELP_LINES:
-            surface.blit(self.font.render(line, True, config.BORDER_COLOR), (x, y))
+            surface.blit(self.font.render(line, True, config.FG_COLOR), (x, y))
             y += 26
 
         if self.last_score is not None:
