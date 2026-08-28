@@ -82,6 +82,23 @@ def test_water_draws_anywhere() -> None:
             water.draw(screen, camera, moment, calm=True)
 
 
+def test_eye_wheel_cycles_look() -> None:
+    _screen()
+    from evolution.creature import EYE, EYE_LOOKS, LOOK_ENEMY, LOOK_FOOD
+    from evolution.editor import EditorScene
+
+    editor = EditorScene(default_blueprint())
+    editor.kind = EYE
+    assert editor.look == LOOK_FOOD
+    editor.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(0, 0), button=4))
+    assert editor.look == LOOK_ENEMY
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_q))
+    assert editor.look == LOOK_FOOD
+    for _ in range(len(EYE_LOOKS)):
+        editor.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(0, 0), button=4))
+    assert editor.look == LOOK_FOOD
+
+
 if __name__ == "__main__":
     for name, func in sorted(globals().items()):
         if name.startswith("test_"):

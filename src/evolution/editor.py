@@ -8,7 +8,12 @@ from evolution import config, creature, hexgrid, render
 from evolution.creature import (
     BONE,
     EYE,
+    EYE_LOOK_NAMES,
+    EYE_LOOKS,
+    EYE_LOOK_VECTORS,
     KINDS,
+    LOOK_ENEMY,
+    LOOK_FOOD,
     PHOTOSYNTH,
     PROCESSOR,
     ROOT,
@@ -47,6 +52,7 @@ HELP_LINES = [
     "ПКМ — убрать клетку",
     "Tab — сменить, что ставим",
     "Q, E или колесо — повернуть двигатель",
+    "у глаза колесо — куда смотрит",
     "1..9 — кнопка двигателя или мышцы",
     "Мышца: клик по клетке, потом по второй",
     "колесо — сила мышцы, ПКМ — снять",
@@ -66,6 +72,7 @@ class EditorScene:
         self.kind = THRUSTER
         self.direction = 0
         self.group = 1
+        self.look = LOOK_FOOD  # куда смотрит глаз, крутится колёсиком
         self.strength = 5  # сила мышцы, крутится колёсиком
         self.muscle_start: Coord | None = None  # первый конец начатой мышцы
         self.last_score = last_score
@@ -98,6 +105,8 @@ class EditorScene:
                     self.strength = max(
                         1, min(config.MUSCLE_MAX_STRENGTH, self.strength + step)
                     )
+                elif self.kind == EYE:
+                    self._cycle_look(step)
                 else:
                     self.direction = (self.direction + step) % 6
 
@@ -117,15 +126,25 @@ class EditorScene:
                 self.kind = MODES[(MODES.index(self.kind) + 1) % len(MODES)]
                 self.muscle_start = None
             elif event.key in (pygame.K_q,):
-                self.direction = (self.direction - 1) % 6
+                if self.kind == EYE:
+                    self._cycle_look(-1)
+                else:
+                    self.direction = (self.direction - 1) % 6
             elif event.key in (pygame.K_e,):
-                self.direction = (self.direction + 1) % 6
+                if self.kind == EYE:
+                    self._cycle_look(1)
+                else:
+                    self.direction = (self.direction + 1) % 6
             elif pygame.K_1 <= event.key <= pygame.K_9:
                 self.group = event.key - pygame.K_0
                 if self.kind not in (THRUSTER, MUSCLE):
                     self.kind = THRUSTER
             elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 self._start_game()
+
+    def _cycle_look(self, step: int) -> None:
+        index = EYE_LOOKS.index(self.look)
+        self.look = EYE_LOOKS[(index + step) % len(EYE_LOOKS)]
 
     def _origin(self) -> tuple[float, float]:
         return ORIGIN[0] + self.pan[0], ORIGIN[1] + self.pan[1]
@@ -147,10 +166,12 @@ class EditorScene:
             if self.kind == THRUSTER:
                 existing.direction = self.direction
                 existing.group = self.group
+            elif self.kind == EYE:
+                existing.look = self.look
             return
         if self.blueprint.cost() + cell_cost(self.kind) > config.CELL_BUDGET:
             return
-        self.blueprint.place(CellSpec(coord, self.kind, self.direction, self.group))
+        self.blueprint.place(CellSpec(coord, self.kind, self.direction, self.group, self.look))
 
     def _place_muscle(self, coord: Coord) -> None:
         """Первый клик задаёт один конец верёвки, второй — другой."""
@@ -242,6 +263,8 @@ class EditorScene:
 
             if spec.kind == THRUSTER:
                 self._draw_thruster_marks(surface, center, size, spec.direction, spec.group)
+            elif spec.kind == EYE:
+                self._draw_eye_marks(surface, center, size, spec.look)
 
         self._draw_muscles(surface, size)
         self._draw_panel(surface)
@@ -281,6 +304,27 @@ class EditorScene:
         label = self.font.render(str(group), True, config.OUTLINE_COLOR)
         surface.blit(label, label.get_rect(center=center))
 
+    def _draw_eye_marks(
+        self,
+        surface: pygame.Surface,
+        center: tuple[float, float],
+        size: float,
+        look: str,
+    ) -> None:
+        """Зрачок: у компаса смещён на сторону света, у еды/врага — цветной."""
+        compass = EYE_LOOK_VECTORS.get(look)
+        if look == LOOK_FOOD:
+            color = config.FOOD_COLOR
+            dx, dy = 0.0, 0.0
+        elif look == LOOK_ENEMY:
+            color = config.ENEMY_SKIN_COLOR
+            dx, dy = 0.0, 0.0
+        else:
+            color = config.OUTLINE_COLOR
+            dx, dy = compass if compass is not None else (0.0, 0.0)
+        pupil = (center[0] + dx * size * 0.28, center[1] + dy * size * 0.28)
+        pygame.draw.circle(surface, color, (int(pupil[0]), int(pupil[1])), int(size * 0.22))
+
     def _draw_panel(self, surface: pygame.Surface) -> None:
         x = PANEL_X
         y = 40
@@ -296,9 +340,9 @@ class EditorScene:
         y += 28
         surface.blit(
             self.font.render(
-                f"Клеток: {len(self.blueprint)}   (кость стоит {cell_cost(BONE)})",
+                f"Клеток: {len(self.blueprint)}",
                 True,
-                config.BORDER_COLOR,
+                config.FG_COLOR,
             ),
             (x, y),
         )
@@ -313,18 +357,23 @@ class EditorScene:
             self.font.render(
                 f"Аппетит: {appetite:.0f}   бак: {appetite * config.ENERGY_RESERVE:.0f}",
                 True,
-                config.BORDER_COLOR,
+                config.FG_COLOR,
             ),
             (x, y),
         )
         y += 28
 
-        # без переработчика существо не сможет добыть ни капли энергии
-        if not any(spec.kind == PROCESSOR for spec in self.blueprint.cells.values()):
-            surface.blit(
-                self.font.render("Без переработчика есть нечем!", True, (230, 130, 120)), (x, y)
-            )
-        y += 34
+        # без еды и без фотосинтеза тело только тратит — и умрёт с голоду
+        kinds = {spec.kind for spec in self.blueprint.cells.values()}
+        if PROCESSOR not in kinds and PHOTOSYNTH not in kinds:
+            warn = (230, 130, 120)
+            for line in (
+                "Без переработчика или клеток фотосинтеза",
+                "существо умрёт с голоду!",
+            ):
+                surface.blit(self.font.render(line, True, warn), (x, y))
+                y += 26
+        y += 8
 
         surface.blit(
             self.font.render(f"Ставим: {KIND_NAMES[self.kind]}", True, config.FG_COLOR), (x, y)
@@ -343,6 +392,15 @@ class EditorScene:
             )
             y += 28
         if self.kind == EYE:
+            surface.blit(
+                self.font.render(
+                    f"Смотрит: {EYE_LOOK_NAMES[self.look]} (колесо)",
+                    True,
+                    config.FG_COLOR,
+                ),
+                (x, y),
+            )
+            y += 28
             surface.blit(
                 self.font.render("Пока жива — шире обзор камеры в бою", True, config.FG_COLOR),
                 (x, y),

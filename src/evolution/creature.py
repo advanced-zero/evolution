@@ -22,6 +22,32 @@ PHOTOSYNTH = "photosynth"
 KINDS = (SKIN, BONE, THRUSTER, PROCESSOR, EYE, PHOTOSYNTH)
 """Виды клеток в том порядке, в котором их перебирает редактор."""
 
+LOOK_FOOD = "food"
+LOOK_ENEMY = "enemy"
+LOOK_NORTH = "north"
+LOOK_EAST = "east"
+LOOK_SOUTH = "south"
+LOOK_WEST = "west"
+EYE_LOOKS = (LOOK_FOOD, LOOK_ENEMY, LOOK_NORTH, LOOK_EAST, LOOK_SOUTH, LOOK_WEST)
+"""Куда может смотреть зрительная клетка: крутится колёсиком в редакторе."""
+
+EYE_LOOK_NAMES = {
+    LOOK_FOOD: "еда",
+    LOOK_ENEMY: "враг",
+    LOOK_NORTH: "север",
+    LOOK_EAST: "восток",
+    LOOK_SOUTH: "юг",
+    LOOK_WEST: "запад",
+}
+
+# Стороны света — оси мира, не нос существа: +x восток, +y юг.
+EYE_LOOK_VECTORS: dict[str, tuple[float, float]] = {
+    LOOK_NORTH: (0.0, -1.0),
+    LOOK_EAST: (1.0, 0.0),
+    LOOK_SOUTH: (0.0, 1.0),
+    LOOK_WEST: (-1.0, 0.0),
+}
+
 ROOT: Coord = (0, 0)
 """Центральная клетка — «мозг». Её потеря означает смерть существа.
 
@@ -41,6 +67,7 @@ class CellSpec:
     kind: str = SKIN
     direction: int = 0  # для двигателя: куда он толкает (0..5)
     group: int = 1  # для двигателя: какой цифрой включается (1..9)
+    look: str = LOOK_FOOD  # для глаза: еда, враг или сторона света
 
 
 # --------------------------------------------------------------------------
@@ -203,7 +230,7 @@ class Blueprint:
 
     def copy(self) -> Blueprint:
         return Blueprint(
-            {c: CellSpec(s.coord, s.kind, s.direction, s.group) for c, s in self.cells.items()},
+            {c: CellSpec(s.coord, s.kind, s.direction, s.group, s.look) for c, s in self.cells.items()},
             [Muscle(m.a, m.b, m.group, m.strength) for m in self.muscles],
         )
 
@@ -213,7 +240,14 @@ class Blueprint:
         return json.dumps(
             {
                 "cells": [
-                    {"q": s.coord[0], "r": s.coord[1], "kind": s.kind, "dir": s.direction, "group": s.group}
+                    {
+                        "q": s.coord[0],
+                        "r": s.coord[1],
+                        "kind": s.kind,
+                        "dir": s.direction,
+                        "group": s.group,
+                        "look": s.look,
+                    }
                     for s in self.cells.values()
                 ],
                 "muscles": [
@@ -238,7 +272,10 @@ class Blueprint:
             coord = (int(item["q"]), int(item["r"]))
             # незнакомый вид (сохранение от старой версии) считаем кожей
             kind = item["kind"] if item["kind"] in KINDS else SKIN
-            cells[coord] = CellSpec(coord, kind, int(item["dir"]), int(item["group"]))
+            look = item.get("look", LOOK_FOOD)
+            if look not in EYE_LOOKS:
+                look = LOOK_FOOD
+            cells[coord] = CellSpec(coord, kind, int(item["dir"]), int(item["group"]), look)
 
         blueprint = cls(cells)
         for item in raw_muscles:
@@ -734,6 +771,44 @@ class Creature:
             for coord, spec in self.blueprint.cells.items()
             if spec.kind == EYE and coord in self.alive_cells
         ]
+
+    def eye_aim(
+        self,
+        coord: Coord,
+        foods: list[tuple[float, float]],
+        bodies: list[tuple[float, float]],
+    ) -> tuple[float, float] | None:
+        """Куда смотрит живой глаз: единичный вектор в осях мира или ничего.
+
+        Стороны света всегда видны. Еду и врага — только в пределах
+        `EYE_SENSE_RANGE` клеток от этой клетки.
+        """
+        spec = self.blueprint.cells.get(coord)
+        if spec is None or spec.kind != EYE or coord not in self.alive_cells:
+            return None
+        compass = EYE_LOOK_VECTORS.get(spec.look)
+        if compass is not None:
+            return compass
+        origin = self.cell_world_pos(coord)
+        points = foods if spec.look == LOOK_FOOD else bodies
+        best: tuple[float, float] | None = None
+        best_d: int | None = None
+        for px, py in points:
+            hq, hr = hexgrid.pixel_to_hex(px - origin[0], py - origin[1], config.HEX_SIZE)
+            dist = hexgrid.distance((0, 0), (hq, hr))
+            if dist > config.EYE_SENSE_RANGE:
+                continue
+            if best_d is None or dist < best_d:
+                best = (px, py)
+                best_d = dist
+        if best is None:
+            return None
+        dx = best[0] - origin[0]
+        dy = best[1] - origin[1]
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            return None
+        return dx / length, dy / length
 
     # --- урон и лечение ---
 

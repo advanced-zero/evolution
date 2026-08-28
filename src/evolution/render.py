@@ -83,6 +83,7 @@ def draw_creature(
     camera: tuple[float, float],
     active_groups: set[int] | None = None,
     font: pygame.font.Font | None = None,
+    world: World | None = None,
 ) -> None:
     cx, cy = camera
     active_groups = active_groups or set()
@@ -141,9 +142,24 @@ def draw_creature(
             )
 
         if spec.kind == EYE:
-            # «зрачок» в центре, чтобы отличать от кожи
+            # зрачок съезжает туда, куда клетка смотрит; не видит — остаётся в центре
+            foods: list[tuple[float, float]] = []
+            bodies: list[tuple[float, float]] = []
+            if world is not None:
+                foods = [(food.x, food.y) for food in world.foods]
+                others = [world.player, *world.enemies]
+                bodies = [
+                    (other.x, other.y)
+                    for other in others
+                    if other is not creature and not other.is_dead
+                ]
+            aim = creature.eye_aim(coord, foods, bodies)
+            px, py = sx, sy
+            if aim is not None:
+                px += aim[0] * config.HEX_SIZE * 0.28
+                py += aim[1] * config.HEX_SIZE * 0.28
             pygame.draw.circle(
-                surface, config.OUTLINE_COLOR, (int(sx), int(sy)), int(config.HEX_SIZE * 0.3)
+                surface, config.OUTLINE_COLOR, (int(px), int(py)), int(config.HEX_SIZE * 0.3)
             )
 
         if spec.kind == THRUSTER:

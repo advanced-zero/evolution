@@ -10,6 +10,9 @@ from evolution import config, hexgrid, physics
 from evolution.creature import (
     BONE,
     EYE,
+    LOOK_ENEMY,
+    LOOK_FOOD,
+    LOOK_NORTH,
     PHOTOSYNTH,
     PROCESSOR,
     ROOT,
@@ -968,6 +971,59 @@ def test_eye_cell_lost_in_combat_stops_counting() -> None:
 
     creature.remove_cell((1, 0))
     assert creature.eyes() == [(1, -1)]
+
+
+def _creature_with_eye(look: str = LOOK_FOOD) -> Creature:
+    bp = Blueprint()
+    bp.place(CellSpec((1, 0), EYE, look=look))
+    return Creature(blueprint=bp, x=2000.0, y=1500.0)
+
+
+def test_eye_look_survives_saving() -> None:
+    bp = Blueprint()
+    bp.place(CellSpec((1, 0), EYE, look=LOOK_NORTH))
+    loaded = Blueprint.from_json(bp.to_json())
+    assert loaded.cells[(1, 0)].look == LOOK_NORTH
+
+    old = '[{"q": 0, "r": 0, "kind": "skin", "dir": 0, "group": 1},'
+    old += ' {"q": 1, "r": 0, "kind": "eye", "dir": 0, "group": 1}]'
+    old_bp = Blueprint.from_json(old)
+    assert old_bp.cells[(1, 0)].look == LOOK_FOOD
+
+
+def test_eye_compass_ignores_food() -> None:
+    """Сторона света — компас мира, еда его не сбивает."""
+    creature = _creature_with_eye(LOOK_NORTH)
+    ex, ey = creature.cell_world_pos((1, 0))
+    assert creature.eye_aim((1, 0), [(ex + 40.0, ey)], []) == (0.0, -1.0)
+
+
+def test_eye_points_at_nearest_food() -> None:
+    creature = _creature_with_eye(LOOK_FOOD)
+    ex, ey = creature.cell_world_pos((1, 0))
+    near = (ex + config.HEX_STEP * 4, ey)
+    far = (ex + config.HEX_STEP * 20, ey)
+    dx, dy = creature.eye_aim((1, 0), [far, near], [])
+    assert dx > 0.9 and abs(dy) < 0.1
+
+
+def test_eye_cannot_see_past_sense_range() -> None:
+    creature = _creature_with_eye(LOOK_FOOD)
+    ex, ey = creature.cell_world_pos((1, 0))
+    too_far = (ex + config.HEX_STEP * (config.EYE_SENSE_RANGE + 1), ey)
+    assert creature.eye_aim((1, 0), [too_far], []) is None
+
+    at_limit = (ex + config.HEX_STEP * config.EYE_SENSE_RANGE, ey)
+    assert creature.eye_aim((1, 0), [at_limit], []) is not None
+
+
+def test_eye_points_at_nearest_enemy() -> None:
+    creature = _creature_with_eye(LOOK_ENEMY)
+    ex, ey = creature.cell_world_pos((1, 0))
+    near = (ex, ey + config.HEX_STEP * 3)
+    far = (ex, ey + config.HEX_STEP * 15)
+    dx, dy = creature.eye_aim((1, 0), [], [far, near])
+    assert dy > 0.9 and abs(dx) < 0.1
 
 
 if __name__ == "__main__":

@@ -75,10 +75,15 @@ class PlayScene:
             for food in self.world.foods:
                 render.draw_food(world_surface, food, camera)
             for enemy in self.world.enemies:
-                render.draw_creature(world_surface, enemy, camera)
+                render.draw_creature(world_surface, enemy, camera, world=self.world)
             if not self.world.player.is_dead:
                 render.draw_creature(
-                    world_surface, self.world.player, camera, self.active_groups, self.small_font
+                    world_surface,
+                    self.world.player,
+                    camera,
+                    self.active_groups,
+                    self.small_font,
+                    world=self.world,
                 )
         finally:
             config.WIDTH, config.HEIGHT = real_width, real_height
