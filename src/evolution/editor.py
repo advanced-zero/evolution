@@ -25,7 +25,9 @@ from evolution.creature import (
     cell_color,
     cell_cost,
     cell_upkeep,
+    cell_work_upkeep,
     default_blueprint,
+    food_energy,
 )
 from evolution.hexgrid import Coord
 
@@ -46,6 +48,82 @@ KIND_NAMES = {
     PHOTOSYNTH: "фотосинтез",
     MUSCLE: "мышца",
 }
+
+
+def kind_help(kind: str) -> list[str]:
+    """Короткие строки про выбранный вид: как работает, цена, голод, бой."""
+    cost = cell_cost(kind)
+    upkeep = cell_upkeep(kind)
+    work = cell_work_upkeep(kind)
+    food = food_energy(kind)
+    chance = round(config.PHOTOSYNTH_UPKEEP_CHANCE * 100)
+    return {
+        SKIN: [
+            "Мягкая клетка: гнётся, сминается и гасит удар.",
+            "Растягиваться почти не может — щелей нет.",
+            f"Цена {cost}. Аппетит {upkeep:g} за удар голода.",
+            "Двигатель на длинной кожаной ножке толкает вяло.",
+            f"Обломок даёт {food:g} энергии.",
+        ],
+        BONE: [
+            "Твёрдый рычаг: не гнётся и не сминается,",
+            "а мышца её ворочает.",
+            "Соседние кости — один жёсткий кусок.",
+            "Толчок двигателя передаёт целиком.",
+            f"Цена {cost}. Не ест. Тяжёлая — разгон вялее.",
+            "Выбить втрое труднее, сама пробивает",
+            "даже при медленном сближении.",
+            f"Обломок даёт {food:g} энергии.",
+        ],
+        THRUSTER: [
+            "Толкает в сторону стрелки, пока держат цифру.",
+            "На одну цифру можно повесить несколько.",
+            f"Цена {cost}. Аппетит {upkeep:g}, до {work:g}",
+            "если работал весь интервал голода.",
+            f"Слабее вражеского. Держишь {config.THRUSTER_OVERHEAT_TIME:g} с —",
+            f"пауза {config.THRUSTER_COOLDOWN_TIME:g} с, стержень краснеет.",
+            "Короткий импульс, основной ход — плавники.",
+            f"Обломок даёт {food:g} энергии.",
+        ],
+        PROCESSOR: [
+            "Единственный способ съесть обломки:",
+            "касанием они не подбираются.",
+            f"Вплотную топит в {config.PROCESS_SPEEDUP:g} раз быстрее;",
+            "несколько рядом складываются.",
+            "Энергию забирает ближайший в зоне кольца.",
+            "Сытому баку ничего не даёт.",
+            f"Цена {cost}. В покое не ест, за работу — до {work:g}.",
+            f"Обломок даёт {food:g} энергии.",
+        ],
+        EYE: [
+            "Пока жива — расширяет обзор камеры в бою",
+            "(несколько глаз складываются).",
+            "Зрачок: еда, враг или сторона света.",
+            f"Еду и врага дальше {config.EYE_SENSE_RANGE:g} клеток не видит.",
+            f"Цена {cost}. Постоянно ест {upkeep:g}, работы нет.",
+            f"Обломок даёт {food:g} энергии.",
+        ],
+        PHOTOSYNTH: [
+            f"На каждом ударе голода даёт {config.PHOTOSYNTH_ENERGY_GAIN:g} энергии,",
+            "еда для этого не нужна.",
+            f"С шансом {chance}% сама просит 1, иначе 0.",
+            f"Цена {cost}. Как кожа, но очень хрупкая —",
+            "при ударе почти всегда вылетает первой.",
+            f"Обломок даёт {food:g} энергии.",
+        ],
+        MUSCLE: [
+            "Не клетка, а верёвка: пока держат цифру —",
+            "стягивает концы, тело гнётся дугой.",
+            "Отпустили — просто отпускает.",
+            "Цена — по очку за клетку длины.",
+            "Ест только пока работает",
+            "(больше сила — больше аппетит).",
+            "На кости — плавник или челюсть;",
+            "внутри одного костяного куска бесполезна.",
+            "Слишком сильная на тонком теле",
+            "сперва упрётся, потом порвёт.",
+        ],
+    }.get(kind, [])
 
 HELP_LINES = [
     "ЛКМ — поставить клетку",
@@ -80,6 +158,7 @@ class EditorScene:
         self._dragging = False
         self._drag_anchor: tuple[int, int] | None = None
         self.font = render.get_font(20)
+        self.small_font = render.get_font(16)
         self.big_font = render.get_font(34, bold=True)
         self.time = 0.0
         self.next_scene = None
@@ -378,67 +457,52 @@ class EditorScene:
         surface.blit(
             self.font.render(f"Ставим: {KIND_NAMES[self.kind]}", True, config.FG_COLOR), (x, y)
         )
-        y += 28
-        if self.kind == BONE:
-            surface.blit(
-                self.font.render("Не гнётся, держит удар и не ест", True, config.FG_COLOR),
-                (x, y),
-            )
-            y += 28
-        if self.kind == PROCESSOR:
-            surface.blit(
-                self.font.render("Топит обломки рядом и кормит тело", True, config.FG_COLOR),
-                (x, y),
-            )
-            y += 28
+        y += 26
         if self.kind == EYE:
             surface.blit(
-                self.font.render(
-                    f"Смотрит: {EYE_LOOK_NAMES[self.look]} (колесо)",
+                self.small_font.render(
+                    f"Смотрит: {EYE_LOOK_NAMES[self.look]} (колесо / Q E)",
                     True,
                     config.FG_COLOR,
                 ),
                 (x, y),
             )
-            y += 28
+            y += 20
+        if self.kind == MUSCLE:
             surface.blit(
-                self.font.render("Пока жива — шире обзор камеры в бою", True, config.FG_COLOR),
+                self.small_font.render(
+                    f"Сила: {self.strength} (колесо)   кнопка: {self.group}",
+                    True,
+                    config.FG_COLOR,
+                ),
                 (x, y),
             )
-            y += 28
-        if self.kind == PHOTOSYNTH:
-            for line in (
-                "Даёт энергию на каждом ударе голода",
-                "Но с шансом сама попросит энергию",
-            ):
-                surface.blit(self.font.render(line, True, config.FG_COLOR), (x, y))
-                y += 26
-        if self.kind == MUSCLE:
-            for line in (
-                f"Сила: {self.strength} (колесо)   кнопка: {self.group}",
-                f"Цена — по очку за клетку длины",
-                "Стягивает концы — тело выгибается дугой",
-            ):
-                surface.blit(self.font.render(line, True, config.FG_COLOR), (x, y))
-                y += 26
-            if self.muscle_start is not None:
-                surface.blit(
-                    self.font.render("Теперь укажи второй конец", True, config.FOOD_COLOR), (x, y)
-                )
-                y += 26
+            y += 20
         if self.kind == THRUSTER:
             surface.blit(
-                self.font.render(f"Кнопка двигателя: {self.group}", True, config.FG_COLOR), (x, y)
+                self.small_font.render(
+                    f"Кнопка двигателя: {self.group}", True, config.FG_COLOR
+                ),
+                (x, y),
             )
-            y += 28
-            surface.blit(self.font.render("Толкает сюда:", True, config.FG_COLOR), (x, y))
-            self._draw_direction_preview(surface, (x + 190, y + 10))
-            y += 46
+            y += 20
+            surface.blit(self.small_font.render("Толкает сюда:", True, config.FG_COLOR), (x, y))
+            self._draw_direction_preview(surface, (x + 190, y + 8))
+            y += 40
+        for line in kind_help(self.kind):
+            surface.blit(self.small_font.render(line, True, config.FG_COLOR), (x, y))
+            y += 20
+        if self.kind == MUSCLE and self.muscle_start is not None:
+            surface.blit(
+                self.small_font.render("Теперь укажи второй конец", True, config.FOOD_COLOR),
+                (x, y),
+            )
+            y += 20
 
-        y += 10
+        y += 8
         for line in HELP_LINES:
-            surface.blit(self.font.render(line, True, config.FG_COLOR), (x, y))
-            y += 26
+            surface.blit(self.small_font.render(line, True, config.FG_COLOR), (x, y))
+            y += 20
 
         if self.last_score is not None:
             y += 20
