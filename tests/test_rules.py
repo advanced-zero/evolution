@@ -22,7 +22,9 @@ from evolution.creature import (
     CellSpec,
     Creature,
     Muscle,
+    Species,
     default_blueprint,
+    evolve_cost,
 )
 from evolution.world import Food, World
 
@@ -713,12 +715,21 @@ def test_world_runs_and_fight_happens() -> None:
 
 
 def test_body_starts_with_a_full_tank() -> None:
-    """Бак считается от аппетита тела, и в заплыв выходим сытыми."""
+    """Бак считается от аппетита тела; без флага игрока выходим сытыми."""
     creature = Creature(blueprint=line_blueprint(3))
     assert creature.appetite == config.BRAIN_UPKEEP + 1 + 1  # мозг и две кожи
     assert creature.max_energy == creature.appetite * config.ENERGY_RESERVE
     assert creature.energy == creature.max_energy
     assert config.HUNGER_PERIOD_MIN <= creature.hunger_timer <= config.HUNGER_PERIOD_MAX
+
+
+def test_player_starts_with_half_tank() -> None:
+    """Игрок выходит голодноватым, враг — с полным баком."""
+    world = World(line_blueprint(3), seed=1)
+    assert world.player.energy == world.player.max_energy * config.PLAYER_START_ENERGY
+    world.spawn_enemy()
+    enemy = world.enemies[-1]
+    assert enemy.energy == enemy.max_energy
 
 
 def test_hunger_takes_the_whole_appetite() -> None:
@@ -960,6 +971,98 @@ def test_full_creature_wastes_what_it_processed() -> None:
     assert eater.energy == eater.max_energy
 
 
+def test_food_bounces_off_food() -> None:
+    """Обломки не проходят друг сквозь друга."""
+    a = Food(200.0, 200.0, 40.0, 0.0, kind=BONE)
+    b = Food(200.0 + config.CELL_RADIUS, 200.0, -40.0, 0.0, kind=BONE)
+    hit = physics.collide_food_pair(a, b)
+    assert hit is not None
+    assert not hit.stick
+    assert a.vx < 40.0 or b.vx > -40.0
+
+
+def test_skin_food_can_stick() -> None:
+    """Кожа к коже липнет, если сближаются не слишком быстро."""
+    a = Food(500.0, 500.0, 8.0, 0.0, kind=SKIN)
+    b = Food(500.0 + config.CELL_RADIUS, 500.0, -8.0, 0.0, kind=SKIN)
+    hit = physics.collide_food_pair(a, b)
+    assert hit is not None and hit.stick and hit.slot is not None and hit.other_hit is not None
+    assert a.absorb(b, hit.slot, hit.other_hit)
+    assert len(a.cells) == 2
+
+
+def test_bone_food_does_not_stick() -> None:
+    """Кость-обломок всегда отскакивает."""
+    a = Food(500.0, 500.0, 8.0, 0.0, kind=BONE)
+    b = Food(500.0 + config.CELL_RADIUS, 500.0, -8.0, 0.0, kind=SKIN)
+    hit = physics.collide_food_pair(a, b)
+    assert hit is None or not hit.stick
+
+
+def test_photosynth_does_not_stick_to_brain() -> None:
+    """Фотосинтез не липнет ни к кому, даже к мозгу."""
+    a = Food(500.0, 500.0, 8.0, 0.0, kind=SKIN, is_brain=True)
+    b = Food(500.0 + config.CELL_RADIUS, 500.0, -8.0, 0.0, kind=PHOTOSYNTH)
+    hit = physics.collide_food_pair(a, b)
+    assert hit is None or not hit.stick
+
+
+def test_singleton_shatters_into_crumbs() -> None:
+    """Одиночный обломок бьётся в крошки с той же суммой энергии."""
+    food = Food(100.0, 100.0, 0.0, 0.0, energy=5.0)
+    crumbs = food.shatter()
+    assert len(crumbs) == config.FOOD_CRUMB_COUNT
+    assert abs(sum(c.energy for c in crumbs) - 5.0) < 1e-9
+
+
+def test_clump_splits_into_whole_cells() -> None:
+    """Удар по куче откалывает целую клетку, а не крошки."""
+    from evolution.food import FoodCell
+
+    clump = Food(
+        300.0,
+        300.0,
+        0.0,
+        0.0,
+        cells=[
+            FoodCell((0, 0), SKIN, energy=5.0),
+            FoodCell((1, 0), SKIN, energy=5.0),
+        ],
+    )
+    piece = clump.split_cell((1, 0))
+    assert piece is not None
+    assert piece.singleton
+    assert clump.singleton
+    assert piece.energy == 5.0
+    assert clump.energy == 5.0
+
+
+def test_skin_picks_up_crumbs_bone_does_not() -> None:
+    """Крошку хватает только кожа."""
+    from evolution.food import Crumb
+
+    world = World(default_blueprint(), seed=5)
+    world.enemies.clear()
+    world.foods.clear()
+    world.crumbs.clear()
+    player = world.player
+    player.energy = 0.0
+    sx, sy = player.cell_world_pos(ROOT)
+    world.crumbs.append(Crumb(x=sx, y=sy, vx=0.0, vy=0.0, energy=2.5))
+    world._food(1 / 60)
+    assert player.energy == 2.5
+    assert world.crumbs == []
+
+    world.crumbs.append(Crumb(x=sx, y=sy, vx=0.0, vy=0.0, energy=2.5))
+    bony = Blueprint()
+    bony.cells[ROOT].kind = BONE
+    world.player = Creature(blueprint=bony, x=player.x, y=player.y, is_player=True)
+    world.player.energy = 0.0
+    world._food(1 / 60)
+    assert world.player.energy == 0.0
+    assert len(world.crumbs) == 1
+
+
 def test_eye_cell_lost_in_combat_stops_counting() -> None:
     """Живая зрительная клетка учитывается, выбитая — сразу пропадает из списка."""
     bp = Blueprint()
@@ -1024,6 +1127,85 @@ def test_eye_points_at_nearest_enemy() -> None:
     far = (ex, ey + config.HEX_STEP * 15)
     dx, dy = creature.eye_aim((1, 0), [], [far, near])
     assert dy > 0.9 and abs(dx) < 0.1
+
+
+def test_old_save_loads_as_one_stage() -> None:
+    old = '{"cells": [{"q": 0, "r": 0, "kind": "skin", "dir": 0, "group": 1, "look": "food"}], "muscles": []}'
+    species = Species.from_json(old)
+    assert len(species.stages) == 1
+    assert ROOT in species.stages[0].cells
+
+
+def test_next_stage_budget_is_previous_tank() -> None:
+    baby = line_blueprint(3)
+    species = Species([baby, line_blueprint(4)])
+    assert species.budget(0) == config.CELL_BUDGET
+    assert species.budget(1) == baby.tank()
+    assert abs(baby.tank() - baby.appetite() * config.ENERGY_RESERVE) < 1e-6
+
+
+def test_evolve_cost_counts_only_new_cells() -> None:
+    baby = line_blueprint(3)
+    grown = line_blueprint(5)
+    assert evolve_cost(baby, grown) == 2  # две новые кожи
+    assert evolve_cost(baby, baby) == 0
+
+
+def test_molt_drops_extra_cells_as_food() -> None:
+    baby = line_blueprint(4)
+    adult = line_blueprint(3)  # короче: хвост лишний
+    adult.place(CellSpec((0, -1), SKIN))  # и новая ветка
+    species = Species([baby, adult])
+    world = World(species, seed=1)
+    world.foods.clear()
+    player = world.player
+    cost = player.next_evolve_cost()
+    assert cost == 1
+    player.energy = max(player.energy, float(cost))
+    world._evolve()
+    assert player.evolving or player.stage_index == 1
+    assert (3, 0) not in player.alive_cells
+    assert any(food.kind == SKIN for food in world.foods)
+
+
+def test_molt_holes_are_free_new_cells_cost() -> None:
+    baby = line_blueprint(3)
+    adult = line_blueprint(4)
+    creature = Creature(blueprint=baby, species=Species([baby, adult]))
+    creature.remove_cell((2, 0))
+    creature.energy = 0.0
+    creature.shed_for_next()
+    creature.start_growing_next()
+    assert creature.evolving
+    assert creature.heal_one()  # дырка (2,0) была в малыше — даром
+    assert creature.energy == 0.0
+    assert (2, 0) in creature.alive_cells
+    assert not creature.heal_one()  # новая (3,0) стоит очко, энергии нет
+    creature.energy = 1.0
+    assert creature.heal_one()
+    assert (3, 0) in creature.alive_cells
+    assert not creature.evolving
+    assert creature.stage_index == 1
+
+
+def test_full_tank_starts_molt_at_spawn() -> None:
+    """Если стартовой энергии хватает на следующий этап — рост сразу."""
+    baby = line_blueprint(3)
+    adult = line_blueprint(5)
+    world = World(Species([baby, adult]), seed=2)
+    player = world.player
+    assert player.energy == player.max_energy * config.PLAYER_START_ENERGY
+    world._evolve()
+    assert player.evolving or player.stage_index >= 1
+
+
+def test_identical_stages_chain_in_one_evolve() -> None:
+    """Пустая копия этапа скипается сразу, пока энергия позволяет."""
+    baby = line_blueprint(3)
+    world = World(Species([baby, baby.copy(), baby.copy()]), seed=3)
+    world._evolve()
+    assert world.player.stage_index == 2
+    assert not world.player.evolving
 
 
 if __name__ == "__main__":

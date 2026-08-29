@@ -28,6 +28,7 @@ from evolution.creature import (
     cell_work_upkeep,
     default_blueprint,
     food_energy,
+    Species,
 )
 from evolution.hexgrid import Coord
 
@@ -136,6 +137,8 @@ HELP_LINES = [
     "колесо — сила мышцы, ПКМ — снять",
     "Стрелки или средняя кнопка мыши — прокрутка вида",
     "Enter — играть",
+    "[ ] — другой этап",
+    "+ / − — добавить или убрать этап",
     "Esc — выход",
 ]
 
@@ -143,10 +146,14 @@ HELP_LINES = [
 class EditorScene:
     """Собираем существо из гексов в пределах бюджета клеток."""
 
-    def __init__(self, blueprint: Blueprint | None = None, last_score: int | None = None) -> None:
-        if blueprint is None:
-            blueprint = Blueprint.load(creature.SAVE_PATH) or default_blueprint()
-        self.blueprint = blueprint.copy()
+    def __init__(self, species: Species | Blueprint | None = None, last_score: int | None = None) -> None:
+        if species is None:
+            loaded = Species.load(creature.SAVE_PATH)
+            species = loaded if loaded is not None else Species([default_blueprint()])
+        elif isinstance(species, Blueprint):
+            species = Species([species])
+        self.species = species.copy()
+        self.stage_index = 0
         self.kind = THRUSTER
         self.direction = 0
         self.group = 1
@@ -162,6 +169,14 @@ class EditorScene:
         self.big_font = render.get_font(34, bold=True)
         self.time = 0.0
         self.next_scene = None
+        self._stage_hit: list[tuple[pygame.Rect, str, int | None]] = []
+
+    @property
+    def blueprint(self) -> Blueprint:
+        return self.species.stages[self.stage_index]
+
+    def _budget(self) -> float:
+        return self.species.budget(self.stage_index)
 
     # --- ввод ---
 
@@ -171,6 +186,10 @@ class EditorScene:
                 # средняя кнопка — перетаскивание вида, не ставит клетку
                 self._dragging = True
                 self._drag_anchor = event.pos
+                return
+            if event.button == 1 and self._click_stage_ui(event.pos):
+                return
+            if event.pos[0] >= PANEL_X:
                 return
             coord = self._coord_at(event.pos)
             if event.button == 1:
@@ -220,6 +239,14 @@ class EditorScene:
                     self.kind = THRUSTER
             elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 self._start_game()
+            elif event.key == pygame.K_LEFTBRACKET:
+                self._set_stage(self.stage_index - 1)
+            elif event.key == pygame.K_RIGHTBRACKET:
+                self._set_stage(self.stage_index + 1)
+            elif event.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
+                self._add_stage()
+            elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
+                self._remove_stage()
 
     def _cycle_look(self, step: int) -> None:
         index = EYE_LOOKS.index(self.look)
@@ -239,7 +266,7 @@ class EditorScene:
             if coord == ROOT:
                 return
             extra = cell_cost(self.kind) - cell_cost(existing.kind)
-            if self.blueprint.cost() + extra > config.CELL_BUDGET:
+            if self.blueprint.cost() + extra > self._budget() + 1e-6:
                 return
             existing.kind = self.kind
             if self.kind == THRUSTER:
@@ -248,7 +275,7 @@ class EditorScene:
             elif self.kind == EYE:
                 existing.look = self.look
             return
-        if self.blueprint.cost() + cell_cost(self.kind) > config.CELL_BUDGET:
+        if self.blueprint.cost() + cell_cost(self.kind) > self._budget() + 1e-6:
             return
         self.blueprint.place(CellSpec(coord, self.kind, self.direction, self.group, self.look))
 
@@ -263,7 +290,7 @@ class EditorScene:
             self.muscle_start = None  # ткнули туда же — передумали
             return
         muscle = Muscle(self.muscle_start, coord, self.group, self.strength)
-        if self.blueprint.cost() + muscle.cost() <= config.CELL_BUDGET:
+        if self.blueprint.cost() + muscle.cost() <= self._budget() + 1e-6:
             self.blueprint.add_muscle(muscle)
         self.muscle_start = None
 
@@ -279,11 +306,44 @@ class EditorScene:
             return
         self.blueprint.remove(coord)
 
+    def _set_stage(self, index: int) -> None:
+        if 0 <= index < len(self.species.stages):
+            self.stage_index = index
+            self.muscle_start = None
+
+    def _add_stage(self) -> None:
+        if len(self.species.stages) >= config.STAGE_MAX:
+            return
+        last = self.species.stages[-1]
+        self.species.stages.append(last.copy())
+        self._set_stage(len(self.species.stages) - 1)
+
+    def _remove_stage(self) -> None:
+        if len(self.species.stages) <= 1:
+            return
+        del self.species.stages[self.stage_index]
+        self._set_stage(min(self.stage_index, len(self.species.stages) - 1))
+
+    def _click_stage_ui(self, pos: tuple[int, int]) -> bool:
+        for rect, action, index in self._stage_hit:
+            if not rect.collidepoint(pos):
+                continue
+            if action == "select" and index is not None:
+                self._set_stage(index)
+            elif action == "add":
+                self._add_stage()
+            elif action == "remove":
+                self._remove_stage()
+            return True
+        return False
+
     def _start_game(self) -> None:
         from evolution.scenes import PlayScene  # поздний импорт: экраны ссылаются друг на друга
 
-        self.blueprint.save(creature.SAVE_PATH)
-        self.next_scene = PlayScene(self.blueprint)
+        if not self.species.valid():
+            return
+        self.species.save(creature.SAVE_PATH)
+        self.next_scene = PlayScene(self.species)
 
     # --- игровой цикл ---
 
@@ -404,17 +464,49 @@ class EditorScene:
         pupil = (center[0] + dx * size * 0.28, center[1] + dy * size * 0.28)
         pygame.draw.circle(surface, color, (int(pupil[0]), int(pupil[1])), int(size * 0.22))
 
+    def _draw_stage_row(self, surface: pygame.Surface, x: int, y: int) -> int:
+        """Кнопки этапов, плюс и минус — куда ткнули, запоминаем в `_stage_hit`."""
+        self._stage_hit = []
+        surface.blit(self.font.render("Этапы", True, config.FG_COLOR), (x, y))
+        y += 28
+        cursor = x
+        for i in range(len(self.species.stages)):
+            label = str(i + 1)
+            text = self.font.render(label, True, config.OUTLINE_COLOR)
+            pad_x, pad_y = 10, 4
+            rect = pygame.Rect(cursor, y, text.get_width() + pad_x * 2, text.get_height() + pad_y * 2)
+            fill = config.THRUSTER_COLOR if i == self.stage_index else config.GRID_COLOR
+            pygame.draw.rect(surface, fill, rect, border_radius=6)
+            surface.blit(text, text.get_rect(center=rect.center))
+            self._stage_hit.append((rect, "select", i))
+            cursor = rect.right + 6
+        plus = self.font.render("+", True, config.FG_COLOR)
+        plus_rect = pygame.Rect(cursor, y, 28, 28)
+        pygame.draw.rect(surface, config.BORDER_COLOR, plus_rect, width=1, border_radius=6)
+        surface.blit(plus, plus.get_rect(center=plus_rect.center))
+        self._stage_hit.append((plus_rect, "add", None))
+        cursor = plus_rect.right + 6
+        minus = self.font.render("−", True, config.FG_COLOR)
+        minus_rect = pygame.Rect(cursor, y, 28, 28)
+        pygame.draw.rect(surface, config.BORDER_COLOR, minus_rect, width=1, border_radius=6)
+        surface.blit(minus, minus.get_rect(center=minus_rect.center))
+        self._stage_hit.append((minus_rect, "remove", None))
+        return y + 34
+
     def _draw_panel(self, surface: pygame.Surface) -> None:
         x = PANEL_X
         y = 40
         title = self.big_font.render("Сборка существа", True, config.FG_COLOR)
         surface.blit(title, (x, y))
         y += 50
+        y = self._draw_stage_row(surface, x, y)
+        y += 8
 
         used = self.blueprint.cost()
-        color = config.FG_COLOR if used < config.CELL_BUDGET else (230, 130, 120)
+        budget = self._budget()
+        color = config.FG_COLOR if used <= budget + 1e-6 else (230, 130, 120)
         surface.blit(
-            self.font.render(f"Очки: {used} / {config.CELL_BUDGET}", True, color), (x, y)
+            self.font.render(f"Очки: {used} / {budget:.0f}", True, color), (x, y)
         )
         y += 28
         surface.blit(
@@ -428,19 +520,28 @@ class EditorScene:
         y += 28
 
         # аппетит: сколько тело просит за один удар голода и какой у него бак
-        appetite = sum(
-            cell_upkeep(spec.kind, coord == ROOT)
-            for coord, spec in self.blueprint.cells.items()
-        )
+        appetite = self.blueprint.appetite()
         surface.blit(
             self.font.render(
-                f"Аппетит: {appetite:.0f}   бак: {appetite * config.ENERGY_RESERVE:.0f}",
+                f"Аппетит: {appetite:.0f}   бак: {self.blueprint.tank():.0f}",
                 True,
                 config.FG_COLOR,
             ),
             (x, y),
         )
-        y += 28
+        y += 24
+        if self.stage_index == 0:
+            cap_hint = "Первый этап — до 50 очков."
+        else:
+            cap_hint = "Потолок этого этапа — бак предыдущего."
+        surface.blit(self.small_font.render(cap_hint, True, config.BORDER_COLOR), (x, y))
+        y += 22
+        if not self.species.valid():
+            surface.blit(
+                self.small_font.render("Какой-то этап дороже потолка — в бой нельзя.", True, (230, 130, 120)),
+                (x, y),
+            )
+            y += 22
 
         # без еды и без фотосинтеза тело только тратит — и умрёт с голоду
         kinds = {spec.kind for spec in self.blueprint.cells.values()}

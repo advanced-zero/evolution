@@ -4,53 +4,27 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from evolution import ai, config, physics
-from evolution.creature import ROOT, SKIN, Blueprint, Creature, cell_color, food_energy
+from evolution.creature import ROOT, SKIN, Blueprint, Creature, Species, cell_color, food_energy
+from evolution.food import Crumb, Food
 
 if TYPE_CHECKING:
     from evolution.cheats import Cheats
 
-
-@dataclass
-class Food:
-    """Отбитая клетка, которая плавает в воде и кормит того, кто её подберёт.
-
-    Обломок выглядит ровно так, как выглядела клетка до отрыва, и по инерции
-    продолжает крутиться. Чем дороже была клетка, тем он сытнее.
-    """
-
-    x: float
-    y: float
-    vx: float
-    vy: float
-    color: tuple[int, int, int] = config.FOOD_COLOR
-    angle: float = 0.0
-    spin: float = 0.0
-    kind: str = SKIN
-    direction: int = 0
-    life: float = config.FOOD_LIFETIME
-    energy: float = config.FOOD_ENERGY[SKIN]
-
-    def step(self, dt: float, decay: float = 1.0) -> None:
-        """`decay` — во сколько раз быстрее обломок тает: его топят переработчики."""
-        damping = math.exp(-config.FOOD_DRAG * dt)
-        self.vx *= damping
-        self.vy *= damping
-        self.spin *= math.exp(-config.ANGULAR_DRAG * dt)
-        self.x = min(max(self.x + self.vx * dt, 0.0), config.WORLD_WIDTH)
-        self.y = min(max(self.y + self.vy * dt, 0.0), config.WORLD_HEIGHT)
-        self.angle += self.spin * dt
-        self.life -= dt * decay
+__all__ = ["Crumb", "Food", "World"]
 
 
 class World:
-    def __init__(self, blueprint: Blueprint, seed: int | None = None) -> None:
+    def __init__(self, species: Species | Blueprint, seed: int | None = None) -> None:
+        if isinstance(species, Blueprint):
+            species = Species([species])
+        self.species = species.copy()
         self.rng = random.Random(seed)
         self.player = Creature(
-            blueprint=blueprint.copy(),
+            blueprint=self.species.stages[0].copy(),
+            species=self.species,
             x=config.WORLD_WIDTH / 2.0,
             y=config.WORLD_HEIGHT / 2.0,
             is_player=True,
@@ -59,6 +33,7 @@ class World:
         self.enemies: list[Creature] = []
         self.brains: dict[int, ai.EnemyBrain] = {}
         self.foods: list[Food] = []
+        self.crumbs: list[Crumb] = []
         self.kills = 0
         self.time = 0.0
         for _ in range(config.ENEMY_COUNT):
@@ -68,14 +43,15 @@ class World:
 
     def spawn_enemy(self) -> None:
         points = self.rng.randint(config.ENEMY_MIN_POINTS, config.ENEMY_MAX_POINTS)
-        blueprint = ai.random_blueprint(points, self.rng)
+        species = ai.random_species(points, self.rng)
         for _ in range(60):
             x = self.rng.uniform(100.0, config.WORLD_WIDTH - 100.0)
             y = self.rng.uniform(100.0, config.WORLD_HEIGHT - 100.0)
             if math.hypot(x - self.player.x, y - self.player.y) >= config.ENEMY_SPAWN_MIN_DISTANCE:
                 break
         enemy = Creature(
-            blueprint=blueprint,
+            blueprint=species.stages[0].copy(),
+            species=species,
             x=x,
             y=y,
             angle=self.rng.uniform(0.0, 2.0 * math.pi),
@@ -86,6 +62,15 @@ class World:
 
     def creatures(self) -> list[Creature]:
         return ([self.player] if not self.player.is_dead else []) + self.enemies
+
+    def bait_points(self) -> list[tuple[float, float]]:
+        """Точки еды для глаза: клетки обломков и крошки."""
+        points: list[tuple[float, float]] = []
+        for food in self.foods:
+            for cell in food.cells:
+                points.append(food.cell_world_pos(cell))
+        points.extend((crumb.x, crumb.y) for crumb in self.crumbs)
+        return points
 
     def lose_cell(self, creature: Creature, coord: tuple[int, int]) -> None:
         """Выбивает клетку и роняет в воду её саму и всё, что через неё держалось."""
@@ -121,6 +106,7 @@ class World:
                     kind=spec.kind,
                     direction=spec.direction,
                     energy=food_energy(spec.kind, coord == ROOT),
+                    is_brain=coord == ROOT,
                 )
             )
 
@@ -145,7 +131,7 @@ class World:
             self.player.apply_muscles(player_groups, dt)
         for enemy in self.enemies:
             brain = self.brains[id(enemy)]
-            groups = brain.think(enemy, self.player, self.foods, dt)
+            groups = brain.think(enemy, self.player, self.foods, dt, self.crumbs)
             enemy.apply_thrust(groups, dt)
             enemy.apply_muscles(groups, dt)
 
@@ -159,8 +145,10 @@ class World:
 
         self._collisions(cheats)
         self._hunger()
-        self._repair(dt, repairing)
         self._food(dt)
+        self._evolve()
+        self._repair(dt, repairing)
+        self._evolve()  # за этот кадр могли дорасти — сразу следующий этап
         self._cleanup()
 
     def _hunger(self) -> None:
@@ -175,15 +163,38 @@ class World:
             }
             self.drop_food(creature, creature.starve(), snapshot)
 
+    def _evolve(self) -> None:
+        """У кого хватило энергии на следующий этап — сбрасывает лишнее и растёт.
+
+        Пока плата нулевая и тело уже совпадает, этапы скипаются в том же кадре.
+        """
+        for creature in self.creatures():
+            while True:
+                cost = creature.next_evolve_cost()
+                if cost is None or creature.energy + 1e-6 < cost:
+                    break
+                snapshot = {
+                    c: (*creature.cell_world_pos(c), *creature.cell_velocity(c))
+                    for c in creature.alive_cells
+                }
+                lost = creature.shed_for_next()
+                self.drop_food(creature, lost, snapshot)
+                creature.start_growing_next()
+                if creature.evolving:
+                    break
+
     def _repair(self, dt: float, repairing: bool) -> None:
-        """Игрок чинится, пока держит кнопку; враги — сами, как только есть чем."""
+        """Игрок чинится по R; во время линьки рост идёт сам. Враги чинятся сами."""
         if not self.player.is_dead:
-            if repairing:
+            if self.player.evolving or repairing:
                 self.player.repair(dt)
             else:
                 self.player.stop_repair()
         for enemy in self.enemies:
             enemy.repair(dt)
+
+    def _shatter(self, food: Food) -> None:
+        self.crumbs.extend(food.shatter())
 
     def _collisions(self, cheats: "Cheats | None" = None) -> None:
         invuln = cheats is not None and cheats.invuln
@@ -195,15 +206,86 @@ class World:
                         continue
                     self.lose_cell(creature, coord)
 
-    def _food(self, dt: float) -> None:
-        """Обломки тают, а переработчики снимают с них энергию.
+        gone_food: set[int] = set()
+        extra_food: list[Food] = []
+        for creature in creatures:
+            for food in self.foods:
+                if id(food) in gone_food or not food.cells:
+                    continue
+                hit = physics.collide_creature_food(creature, food)
+                if hit is None:
+                    continue
+                for coord in hit.cells:
+                    if invuln and creature is self.player:
+                        continue
+                    self.lose_cell(creature, coord)
+                if hit.shatter:
+                    self._shatter(food)
+                    gone_food.add(id(food))
+                elif hit.split is not None:
+                    piece = food.split_cell(hit.split)
+                    if piece is not None:
+                        extra_food.append(piece)
 
-        Касанием обломок не подобрать: рядом с переработчиком он растворяется в
-        `PROCESS_SPEEDUP` раз быстрее (и это складывается), а всю его энергию в
-        момент растворения забирает тот, чей переработчик оказался ближе всех.
+        foods = [food for food in self.foods if id(food) not in gone_food] + extra_food
+        extra_food = []
+        for i, a in enumerate(foods):
+            if id(a) in gone_food or not a.cells:
+                continue
+            for b in foods[i + 1 :]:
+                if id(b) in gone_food or not b.cells:
+                    continue
+                hit = physics.collide_food_pair(a, b)
+                if hit is None:
+                    continue
+                if hit.stick and hit.slot is not None and hit.other_hit is not None:
+                    if a.absorb(b, hit.slot, hit.other_hit):
+                        gone_food.add(id(b))
+                    else:
+                        dx, dy = b.x - a.x, b.y - a.y
+                        dist = math.hypot(dx, dy) or 1.0
+                        b.x += dx / dist * 4.0
+                        b.y += dy / dist * 4.0
+                    continue
+                if hit.shatter_a:
+                    self._shatter(a)
+                    gone_food.add(id(a))
+                elif hit.split_a is not None:
+                    piece = a.split_cell(hit.split_a)
+                    if piece is not None:
+                        extra_food.append(piece)
+                if hit.shatter_b:
+                    self._shatter(b)
+                    gone_food.add(id(b))
+                elif hit.split_b is not None:
+                    piece = b.split_cell(hit.split_b)
+                    if piece is not None:
+                        extra_food.append(piece)
+
+        self.foods = [food for food in foods if id(food) not in gone_food] + extra_food
+
+        for creature in self.creatures():
+            for crumb in self.crumbs:
+                for who, coord in physics.collide_creature_crumb(creature, crumb):
+                    if invuln and who is self.player:
+                        continue
+                    self.lose_cell(who, coord)
+
+        for food in self.foods:
+            for crumb in self.crumbs:
+                physics.collide_food_crumb(food, crumb)
+        for i, a in enumerate(self.crumbs):
+            for b in self.crumbs[i + 1 :]:
+                physics.collide_crumb_pair(a, b)
+
+    def _food(self, dt: float) -> None:
+        """Обломки тают, крошки подбирает кожа, переработчики снимают энергию.
+
+        Целую клетку касанием не взять: рядом с переработчиком она растворяется в
+        `PROCESS_SPEEDUP` раз быстрее (и это складывается), а энергию в момент
+        растворения забирает тот, чей переработчик ближе всех.
         """
         creatures = self.creatures()
-        # где сейчас все переработчики мира — считаем один раз за кадр
         processors = []
         for creature in creatures:
             creature.processing.clear()
@@ -211,26 +293,79 @@ class World:
                 px, py = creature.cell_world_pos(coord)
                 processors.append((creature, coord, px, py))
 
-        alive_food: list[Food] = []
+        skins: list[tuple[Creature, float, float]] = []
+        for creature in creatures:
+            for coord in creature.alive_cells:
+                if creature.kind_of(coord) != SKIN:
+                    continue
+                sx, sy = creature.cell_world_pos(coord)
+                skins.append((creature, sx, sy))
+
+        moved: list[Food] = []
         for food in self.foods:
+            moved.extend(food.move(dt))
+        self.foods.extend(moved)
+
+        alive_food: list[Food] = []
+        born: list[Food] = []
+        for food in self.foods:
+            if not food.cells:
+                continue
+            kept = []
+            for cell in food.cells:
+                melting = 0
+                nearest: tuple[float, Creature] | None = None
+                cx, cy = food.cell_world_pos(cell)
+                for creature, coord, px, py in processors:
+                    distance = math.hypot(cx - px, cy - py)
+                    if distance <= config.PROCESS_RADIUS:
+                        melting += 1
+                        creature.processing.add(coord)
+                        creature.work_time[coord] = creature.work_time.get(coord, 0.0) + dt
+                    if distance <= config.COLLECT_RADIUS and (
+                        nearest is None or distance < nearest[0]
+                    ):
+                        nearest = (distance, creature)
+                # одиночка без переработчиков тает как раньше: decay 1
+                cell.life -= dt * max(1.0, config.PROCESS_SPEEDUP * melting)
+                if cell.life > 0.0:
+                    kept.append(cell)
+                elif nearest is not None:
+                    nearest[1].eat(cell.energy)
+            food.cells = kept
+            if not food.cells:
+                continue
+            food._recompute(keep_position=True)
+            born.extend(food.split_disconnected())
+            alive_food.append(food)
+        self.foods = alive_food + born
+
+        alive_crumbs: list[Crumb] = []
+        for crumb in self.crumbs:
             melting = 0
             nearest: tuple[float, Creature] | None = None
+            picked = False
+            for creature, sx, sy in skins:
+                if math.hypot(crumb.x - sx, crumb.y - sy) <= config.CELL_RADIUS + config.FOOD_CRUMB_RADIUS:
+                    if creature.eat(crumb.energy):
+                        picked = True
+                        break
+            if picked:
+                continue
             for creature, coord, px, py in processors:
-                distance = math.hypot(food.x - px, food.y - py)
+                distance = math.hypot(crumb.x - px, crumb.y - py)
                 if distance <= config.PROCESS_RADIUS:
                     melting += 1
                     creature.processing.add(coord)
-                    # работу переработчика оплатим на ближайшем ударе голода
                     creature.work_time[coord] = creature.work_time.get(coord, 0.0) + dt
                 if distance <= config.COLLECT_RADIUS and (nearest is None or distance < nearest[0]):
                     nearest = (distance, creature)
-
-            food.step(dt, max(1.0, config.PROCESS_SPEEDUP * melting))
-            if food.life > 0.0:
-                alive_food.append(food)
+            crumb.step(dt, max(1.0, config.PROCESS_SPEEDUP * melting))
+            if crumb.life > 0.0:
+                alive_crumbs.append(crumb)
             elif nearest is not None:
-                nearest[1].eat(food.energy)  # обрезается по баку: сытому впрок не пойдёт
-        self.foods = alive_food
+                nearest[1].eat(crumb.energy)
+        self.crumbs = alive_crumbs
 
     def _cleanup(self) -> None:
         survivors: list[Creature] = []

@@ -8,7 +8,8 @@ import pygame
 
 from evolution import config, hexgrid, water
 from evolution.creature import EYE, PROCESSOR, THRUSTER, Creature, cell_color
-from evolution.world import Food, World
+from evolution.food import Crumb, Food
+from evolution.world import World
 
 
 def get_font(size: int, bold: bool = False) -> pygame.font.Font:
@@ -146,7 +147,7 @@ def draw_creature(
             foods: list[tuple[float, float]] = []
             bodies: list[tuple[float, float]] = []
             if world is not None:
-                foods = [(food.x, food.y) for food in world.foods]
+                foods = world.bait_points()
                 others = [world.player, *world.enemies]
                 bodies = [
                     (other.x, other.y)
@@ -181,19 +182,30 @@ def draw_creature(
 
 def draw_food(surface: pygame.Surface, food: Food, camera: tuple[float, float]) -> None:
     """Обломок выглядит как клетка, которой он был, — только гаснет со временем."""
-    sx, sy = food.x - camera[0], food.y - camera[1]
+    fade = min(1.0, max(0.25, food.life / config.FOOD_FADE_TIME))
+    for cell in food.cells:
+        wx, wy = food.cell_world_pos(cell)
+        sx, sy = wx - camera[0], wy - camera[1]
+        if not (-40 <= sx <= config.WIDTH + 40 and -40 <= sy <= config.HEIGHT + 40):
+            continue
+        color = tuple(int(c * fade) for c in cell.color)
+        draw_hex(surface, (sx, sy), config.HEX_SIZE, color, food.angle)
+        if cell.kind == THRUSTER:
+            dx, dy = hexgrid.direction_vector(cell.direction)
+            wdx = dx * math.cos(food.angle) - dy * math.sin(food.angle)
+            wdy = dx * math.sin(food.angle) + dy * math.cos(food.angle)
+            tip = (sx + wdx * config.HEX_SIZE * 0.9, sy + wdy * config.HEX_SIZE * 0.9)
+            pygame.draw.line(surface, config.OUTLINE_COLOR, (sx, sy), tip, 2)
+
+
+def draw_crumb(surface: pygame.Surface, crumb: Crumb, camera: tuple[float, float]) -> None:
+    """Крошка — маленький шестиугольник того же цвета, что обломок."""
+    sx, sy = crumb.x - camera[0], crumb.y - camera[1]
     if not (-40 <= sx <= config.WIDTH + 40 and -40 <= sy <= config.HEIGHT + 40):
         return
-    fade = min(1.0, max(0.25, food.life / config.FOOD_FADE_TIME))
-    color = tuple(int(c * fade) for c in food.color)
-    draw_hex(surface, (sx, sy), config.HEX_SIZE, color, food.angle)
-
-    if food.kind == THRUSTER:
-        dx, dy = hexgrid.direction_vector(food.direction)
-        wdx = dx * math.cos(food.angle) - dy * math.sin(food.angle)
-        wdy = dx * math.sin(food.angle) + dy * math.cos(food.angle)
-        tip = (sx + wdx * config.HEX_SIZE * 0.9, sy + wdy * config.HEX_SIZE * 0.9)
-        pygame.draw.line(surface, config.OUTLINE_COLOR, (sx, sy), tip, 2)
+    fade = min(1.0, max(0.25, crumb.life / config.FOOD_FADE_TIME))
+    color = tuple(int(c * fade) for c in crumb.color)
+    draw_hex(surface, (sx, sy), config.FOOD_CRUMB_SIZE, color, crumb.angle)
 
 
 def draw_energy_bar(

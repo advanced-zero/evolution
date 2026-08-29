@@ -18,8 +18,10 @@ from evolution.creature import (
     Blueprint,
     CellSpec,
     Creature,
+    Species,
     cell_cost,
 )
+from evolution.food import Crumb
 
 FORWARD = 1
 TURN_LEFT = 2
@@ -65,6 +67,53 @@ def random_blueprint(points: int, rng: random.Random) -> Blueprint:
         _grow_bones(bp, bones)
     _grow_processors(bp, rng)
     return bp
+
+
+def _grow_stage(previous: Blueprint, budget: float, rng: random.Random) -> Blueprint:
+    """Копия прошлого этапа, доращённая до бака — следующий возраст врага."""
+    bp = previous.copy()
+    guard = 0
+    while bp.cost() + cell_cost(SKIN) <= budget + 1e-6 and guard < 80:
+        guard += 1
+        base = rng.choice(list(bp.cells))
+        spot = rng.choice(hexgrid.neighbors(base))
+        if bp.can_place(spot):
+            bp.place(CellSpec(spot, SKIN))
+    # новые кожи по краям часть делаем двигателями — иначе просто толстеет
+    fresh = [c for c in bp.cells if c not in previous.cells]
+    rng.shuffle(fresh)
+    for coord in fresh[: max(0, len(fresh) // 3)]:
+        spec = bp.cells[coord]
+        spec.kind = THRUSTER
+        spec.direction = 0
+        px, py = hexgrid.hex_to_pixel(coord, 1.0)
+        if abs(py) < 0.6:
+            spec.group = FORWARD
+        else:
+            spec.group = TURN_RIGHT if py > 0 else TURN_LEFT
+    if rng.random() < config.ENEMY_BONE_CHANCE:
+        skin = [c for c in fresh if bp.cells[c].kind == SKIN]
+        rng.shuffle(skin)
+        for coord in skin:
+            extra = cell_cost(BONE) - cell_cost(SKIN)
+            if bp.cost() + extra > budget + 1e-6:
+                break
+            bp.cells[coord].kind = BONE
+    return bp
+
+
+def random_species(points: int, rng: random.Random) -> Species:
+    """Враг с 1–3 этапами: первый как раньше, следующие — копия, выросшая до бака."""
+    first = random_blueprint(points, rng)
+    stages = [first]
+    extra = rng.randint(0, 2)
+    for _ in range(extra):
+        budget = stages[-1].tank()
+        nxt = _grow_stage(stages[-1], budget, rng)
+        if nxt.cost() <= stages[-1].cost():
+            break
+        stages.append(nxt)
+    return Species(stages)
 
 
 def _grow_processors(bp: Blueprint, rng: random.Random) -> None:
@@ -136,14 +185,23 @@ def steer(creature: Creature, target_angle: float) -> set[int]:
     return active
 
 
-def _nearest_food(me: Creature, foods: list) -> object | None:
-    """Ближайший обломок в поле зрения — за ним и поплывём, когда голодно."""
+def _has_skin(me: Creature) -> bool:
+    return any(me.kind_of(coord) == SKIN for coord in me.alive_cells)
+
+
+def _nearest_food(me: Creature, foods: list, crumbs: list | None = None) -> object | None:
+    """Ближайший обломок или крошка в поле зрения."""
     best = None
     best_distance = config.VISION_RADIUS
     for food in foods:
         distance = math.hypot(food.x - me.x, food.y - me.y)
         if distance < best_distance:
             best, best_distance = food, distance
+    if crumbs and _has_skin(me):
+        for crumb in crumbs:
+            distance = math.hypot(crumb.x - me.x, crumb.y - me.y)
+            if distance < best_distance:
+                best, best_distance = crumb, distance
     return best
 
 
@@ -165,6 +223,7 @@ class EnemyBrain:
         player: Creature | None,
         foods: list | None = None,
         dt: float = 0.0,
+        crumbs: list | None = None,
     ) -> set[int]:
         self.wander_timer -= dt
         self.backoff_timer = max(0.0, self.backoff_timer - dt)
@@ -187,12 +246,13 @@ class EnemyBrain:
                 return steer(me, math.atan2(dy, dx))
 
         # голодному еда важнее прогулки — и залатать дырки тоже нужна энергия
-        if (hungry or beaten) and foods:
-            food = _nearest_food(me, foods)
+        if (hungry or beaten) and (foods or crumbs):
+            food = _nearest_food(me, foods or [], crumbs)
             if food is not None:
                 dx, dy = food.x - me.x, food.y - me.y
-                # подошли вплотную — глушим двигатели и висим, пока не переварится
-                if math.hypot(dx, dy) < config.PROCESS_RADIUS * 2.0:
+                # крошку надо коснуться кожей, целый обломок — переварить на месте
+                halt = config.FOOD_CRUMB_RADIUS * 2.0 if isinstance(food, Crumb) else config.PROCESS_RADIUS * 2.0
+                if math.hypot(dx, dy) < halt:
                     return set()
                 return steer(me, math.atan2(dy, dx))
 

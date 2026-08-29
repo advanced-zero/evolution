@@ -175,6 +175,14 @@ class Blueprint:
         cells = sum(cell_cost(spec.kind) for spec in self.cells.values())
         return cells + sum(m.cost() for m in self.muscles)
 
+    def appetite(self) -> float:
+        """Сколько чертёж просит за удар голода в покое — от этого считается бак."""
+        return sum(cell_upkeep(spec.kind, coord == ROOT) for coord, spec in self.cells.items())
+
+    def tank(self) -> float:
+        """Размер бака полного тела по этому чертежу."""
+        return self.appetite() * config.ENERGY_RESERVE
+
     def add_muscle(self, muscle: Muscle) -> bool:
         """Натягивает верёвку между двумя разными живыми клетками чертежа."""
         if muscle.a == muscle.b:
@@ -236,33 +244,33 @@ class Blueprint:
 
     # --- сохранение и загрузка ---
 
+    def to_dict(self) -> dict:
+        return {
+            "cells": [
+                {
+                    "q": s.coord[0],
+                    "r": s.coord[1],
+                    "kind": s.kind,
+                    "dir": s.direction,
+                    "group": s.group,
+                    "look": s.look,
+                }
+                for s in self.cells.values()
+            ],
+            "muscles": [
+                {
+                    "aq": m.a[0], "ar": m.a[1], "bq": m.b[0], "br": m.b[1],
+                    "group": m.group, "strength": m.strength,
+                }
+                for m in self.muscles
+            ],
+        }
+
     def to_json(self) -> str:
-        return json.dumps(
-            {
-                "cells": [
-                    {
-                        "q": s.coord[0],
-                        "r": s.coord[1],
-                        "kind": s.kind,
-                        "dir": s.direction,
-                        "group": s.group,
-                        "look": s.look,
-                    }
-                    for s in self.cells.values()
-                ],
-                "muscles": [
-                    {
-                        "aq": m.a[0], "ar": m.a[1], "bq": m.b[0], "br": m.b[1],
-                        "group": m.group, "strength": m.strength,
-                    }
-                    for m in self.muscles
-                ],
-            }
-        )
+        return json.dumps(self.to_dict())
 
     @classmethod
-    def from_json(cls, text: str) -> Blueprint:
-        data = json.loads(text)
+    def from_dict(cls, data: dict | list) -> Blueprint:
         # сохранение от версии без мышц — просто список клеток
         raw_cells = data if isinstance(data, list) else data["cells"]
         raw_muscles = [] if isinstance(data, list) else data.get("muscles", [])
@@ -289,6 +297,10 @@ class Blueprint:
             )
         return blueprint
 
+    @classmethod
+    def from_json(cls, text: str) -> Blueprint:
+        return cls.from_dict(json.loads(text))
+
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.to_json(), encoding="utf-8")
@@ -299,6 +311,60 @@ class Blueprint:
             return cls.from_json(path.read_text(encoding="utf-8"))
         except (OSError, ValueError, KeyError):
             return None
+
+
+class Species:
+    """Цепочка этапов одного существа: в бою оно начинает с первого и линяет дальше."""
+
+    def __init__(self, stages: list[Blueprint] | None = None) -> None:
+        self.stages: list[Blueprint] = [s.copy() for s in stages] if stages else [Blueprint()]
+        if not self.stages:
+            self.stages = [Blueprint()]
+
+    def __len__(self) -> int:
+        return len(self.stages)
+
+    def copy(self) -> Species:
+        return Species(self.stages)
+
+    def budget(self, index: int) -> float:
+        """Потолок очков этапа: у первого 50, у следующего — бак предыдущего."""
+        if index <= 0:
+            return float(config.CELL_BUDGET)
+        return self.stages[index - 1].tank()
+
+    def valid(self) -> bool:
+        return all(stage.cost() <= self.budget(i) + 1e-6 for i, stage in enumerate(self.stages))
+
+    def to_json(self) -> str:
+        return json.dumps({"stages": [stage.to_dict() for stage in self.stages]})
+
+    @classmethod
+    def from_json(cls, text: str) -> Species:
+        data = json.loads(text)
+        if isinstance(data, dict) and "stages" in data:
+            stages = [Blueprint.from_dict(item) for item in data["stages"]]
+            return cls(stages or [Blueprint()])
+        return cls([Blueprint.from_dict(data)])
+
+    def save(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.to_json(), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: Path) -> Species | None:
+        try:
+            return cls.from_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError):
+            return None
+
+
+def evolve_cost(previous: Blueprint, nxt: Blueprint) -> int:
+    """Сколько энергии нужно, чтобы начать рост: новые клетки и новые мышцы."""
+    cells = sum(cell_cost(spec.kind) for coord, spec in nxt.cells.items() if coord not in previous.cells)
+    old_muscles = {frozenset((m.a, m.b)) for m in previous.muscles}
+    muscles = sum(m.cost() for m in nxt.muscles if frozenset((m.a, m.b)) not in old_muscles)
+    return cells + muscles
 
 
 def connected_from(coords: set[Coord], start: Coord) -> set[Coord]:
@@ -420,6 +486,11 @@ class Creature:
     joints: list[tuple[Coord, Coord, Coord]] = field(default_factory=list)
     pulling: set[int] = field(default_factory=set)  # какие мышцы тянут прямо сейчас
     muscle_work: dict[int, float] = field(default_factory=dict)  # наработка мышц
+    # этапы развития: в бою начинает с первого и само зарастает до следующего
+    species: Species | None = None
+    stage_index: int = 0
+    evolving: bool = False
+    _molt_from: set[Coord] = field(default_factory=set)  # клетки прошлого этапа — дырки бесплатны
 
     # перегрев двигателей — только у игрока, отдельно по каждой группе (кнопке)
     thruster_heat: dict[int, float] = field(default_factory=dict)  # 0..1
@@ -427,9 +498,20 @@ class Creature:
     thruster_idle: dict[int, float] = field(default_factory=dict)  # сколько подряд группа не нажата
 
     def __post_init__(self) -> None:
+        if self.species is None:
+            self.species = Species([self.blueprint])
+        else:
+            self.species = self.species.copy()
+        self.blueprint = self.species.stages[0].copy()
+        self.stage_index = 0
+        self.evolving = False
         self.alive_cells = set(self.blueprint.cells)
         self._recompute(keep_position=False)
-        self.energy = self.max_energy  # в заплыв выходим с полным баком
+        # игрок выходит голодноватым, иначе сразу линяет без боя; враги — сытые
+        if self.is_player:
+            self.energy = self.max_energy * config.PLAYER_START_ENERGY
+        else:
+            self.energy = self.max_energy
         self.reset_hunger()
         self._prev_vx, self._prev_vy, self._prev_spin = self.vx, self.vy, self.spin
         self._water_dv = (0.0, 0.0, 0.0)
@@ -711,7 +793,10 @@ class Creature:
         """
         self.appetite = sum(cell_upkeep(self.kind_of(c), c == ROOT) for c in self.alive_cells)
         self.max_energy = self.appetite * config.ENERGY_RESERVE
-        self.energy = min(self.energy, self.max_energy)
+        # во время линьки бак сжимается, а плата за новые клетки ещё в нём —
+        # обрезать энергию нельзя, иначе рост сразу встанет
+        if not self.evolving:
+            self.energy = min(self.energy, self.max_energy)
 
     def _recompute_transmit(self) -> None:
         """Какая доля толчка клетки доходит до тела.
@@ -843,19 +928,32 @@ class Creature:
         ]
         if not candidates:
             return None
-        return min(candidates, key=lambda c: (hexgrid.distance(ROOT, c), c))
+        # при линьке сначала даровые дырки прошлого этапа, потом платные новые
+        return min(
+            candidates,
+            key=lambda c: (
+                0 if self.evolving and c in self._molt_from else 1,
+                hexgrid.distance(ROOT, c),
+                c,
+            ),
+        )
 
     def heal_one(self) -> bool:
         """Отращивает одну клетку за энергию: столько же, сколько стоит постройка."""
         coord = self._next_hole()
         if coord is None:
             return False
-        price = cell_cost(self.kind_of(coord))
+        # дырка прошлого этапа при линьке зарастает даром; новая клетка — за очки
+        if self.evolving and coord in self._molt_from:
+            price = 0
+        else:
+            price = cell_cost(self.kind_of(coord))
         if self.energy < price:
             return False
         self.energy -= price
         self.alive_cells.add(coord)
         self._recompute()
+        self._finish_evolve_if_grown()
         return True
 
     def heal(self, count: int = 1) -> int:
@@ -888,6 +986,54 @@ class Creature:
         """Чит: мгновенно и бесплатно возвращает все клетки чертежа."""
         self.alive_cells = set(self.blueprint.cells)
         self._recompute()
+        self._finish_evolve_if_grown()
+
+    def next_evolve_cost(self) -> int | None:
+        """Плата за переход на следующий этап или None, если расти больше некуда."""
+        if self.species is None or self.evolving:
+            return None
+        nxt = self.stage_index + 1
+        if nxt >= len(self.species.stages):
+            return None
+        return evolve_cost(self.species.stages[self.stage_index], self.species.stages[nxt])
+
+    def shed_for_next(self) -> list[Coord]:
+        """Сбрасывает клетки, которых нет в следующем этапе. Чертёж ещё старый."""
+        if self.species is None:
+            return []
+        nxt = self.species.stages[self.stage_index + 1]
+        extra = [c for c in list(self.alive_cells) if c not in nxt.cells]
+        for coord in extra:
+            self.alive_cells.discard(coord)
+        # линька уже началась: бак сожмётся, плату за рост резать нельзя
+        self.evolving = True
+        self._recompute()
+        return extra
+
+    def start_growing_next(self) -> None:
+        """Чертёж становится следующим этапом; рост идёт сам, как ремонт."""
+        assert self.species is not None
+        previous = self.species.stages[self.stage_index]
+        nxt = self.species.stages[self.stage_index + 1]
+        old_muscles = {frozenset((m.a, m.b)) for m in previous.muscles}
+        muscle_price = sum(m.cost() for m in nxt.muscles if frozenset((m.a, m.b)) not in old_muscles)
+        self.energy = max(0.0, self.energy - muscle_price)
+        self._molt_from = set(previous.cells)
+        self.evolving = True
+        self.blueprint = nxt.copy()
+        self.repair_progress = 0.0
+        self._recompute()
+        self._finish_evolve_if_grown()
+
+    def _finish_evolve_if_grown(self) -> None:
+        if not self.evolving:
+            return
+        if any(c not in self.alive_cells for c in self.blueprint.cells):
+            return
+        self.evolving = False
+        self.stage_index += 1
+        self._molt_from = set()
+        self.energy = min(self.energy, self.max_energy)
 
     # --- энергия и голод ---
 

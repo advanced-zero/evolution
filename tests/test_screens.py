@@ -11,7 +11,7 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 import pygame
 
 from evolution import config, creature
-from evolution.creature import ROOT, default_blueprint
+from evolution.creature import ROOT, CellSpec, Species, default_blueprint
 
 # тест не должен затирать существо, которое собрал игрок
 creature.SAVE_PATH = Path(tempfile.gettempdir()) / "evolution-test" / "creature.json"
@@ -97,6 +97,28 @@ def test_eye_wheel_cycles_look() -> None:
     for _ in range(len(EYE_LOOKS)):
         editor.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(0, 0), button=4))
     assert editor.look == LOOK_FOOD
+
+
+def test_editor_stages_save_and_start_from_first() -> None:
+    screen = _screen()
+    from evolution.editor import EditorScene
+    from evolution.scenes import PlayScene
+
+    baby = default_blueprint()
+    grown = baby.copy()
+    grown.place(CellSpec((2, 0), "skin"))
+    editor = EditorScene(Species([baby, grown]))
+    assert len(editor.species.stages) == 2
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RIGHTBRACKET))
+    assert editor.stage_index == 1
+    editor.draw(screen)
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    play = editor.update(1 / 60)
+    assert isinstance(play, PlayScene)
+    assert play.world.player.stage_index == 0
+    assert len(play.world.player.species.stages) == 2
+    saved = Species.load(creature.SAVE_PATH)
+    assert saved is not None and len(saved.stages) == 2
 
 
 if __name__ == "__main__":

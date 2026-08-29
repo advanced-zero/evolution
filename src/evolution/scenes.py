@@ -6,7 +6,7 @@ import pygame
 
 from evolution import config, render
 from evolution.cheats import Cheats
-from evolution.creature import Blueprint
+from evolution.creature import Blueprint, Species
 from evolution.editor import EditorScene
 from evolution.world import World
 
@@ -16,9 +16,11 @@ __all__ = ["EditorScene", "PlayScene", "GameOverScene"]
 class PlayScene:
     """Бой: плаваем, таранимся, подбираем клетки."""
 
-    def __init__(self, blueprint: Blueprint) -> None:
-        self.blueprint = blueprint
-        self.world = World(blueprint)
+    def __init__(self, species: Species | Blueprint) -> None:
+        if isinstance(species, Blueprint):
+            species = Species([species])
+        self.species = species.copy()
+        self.world = World(self.species)
         self.active_groups: set[int] = set()
         self.repairing = False
         self.cheats = Cheats()
@@ -46,7 +48,7 @@ class PlayScene:
         if self.world.player.is_dead:
             self.death_delay += dt
             if self.death_delay > 1.2:
-                return GameOverScene(self.blueprint, self.world.kills)
+                return GameOverScene(self.species, self.world.kills)
         return None
 
     def _camera_zoom(self) -> float:
@@ -74,6 +76,8 @@ class PlayScene:
 
             for food in self.world.foods:
                 render.draw_food(world_surface, food, camera)
+            for crumb in self.world.crumbs:
+                render.draw_crumb(world_surface, crumb, camera)
             for enemy in self.world.enemies:
                 render.draw_creature(world_surface, enemy, camera, world=self.world)
             if not self.world.player.is_dead:
@@ -96,6 +100,8 @@ class PlayScene:
         player = self.world.player
         lines = [
             f"Съедено врагов: {self.world.kills}",
+            f"Этап: {player.stage_index + 1} / {len(player.species.stages) if player.species else 1}"
+            + ("  растёт…" if player.evolving else ""),
             f"Клетки: {len(player.alive_cells)} / {len(player.blueprint.cells)}",
             "Двигатели: " + (" ".join(str(g) for g in sorted(player.groups())) or "нет"),
         ]
@@ -111,6 +117,16 @@ class PlayScene:
             f"   голод через {max(0.0, player.hunger_timer):.0f} с"
         )
         surface.blit(self.small_font.render(energy_line, True, config.FG_COLOR), (16, y))
+        y += 20
+        cost = player.next_evolve_cost()
+        if player.evolving:
+            grow = "Тело зарастает на следующий этап. R сейчас не действует."
+        elif cost is not None:
+            need = max(0.0, cost - player.energy)
+            grow = f"До следующего этапа нужно {need:.0f} энергии."
+        else:
+            grow = "Дальше расти некуда."
+        surface.blit(self.small_font.render(grow, True, config.BORDER_COLOR), (16, y))
 
         hint = self.small_font.render(
             "Цифры — двигатели, R — залечить дырки за энергию, Esc — выход. "
@@ -129,8 +145,10 @@ class PlayScene:
 class GameOverScene:
     """Существо погибло — показываем счёт и возвращаем в редактор."""
 
-    def __init__(self, blueprint: Blueprint, kills: int) -> None:
-        self.blueprint = blueprint
+    def __init__(self, species: Species | Blueprint, kills: int) -> None:
+        if isinstance(species, Blueprint):
+            species = Species([species])
+        self.species = species
         self.kills = kills
         self.font = render.get_font(24)
         self.big_font = render.get_font(48, bold=True)
@@ -143,7 +161,7 @@ class GameOverScene:
             pygame.K_KP_ENTER,
             pygame.K_SPACE,
         ):
-            self.next_scene = EditorScene(self.blueprint, last_score=self.kills)
+            self.next_scene = EditorScene(self.species, last_score=self.kills)
 
     def update(self, dt: float):
         self.time += dt
