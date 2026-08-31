@@ -18,6 +18,7 @@ from evolution.creature import (
     ROOT,
     SKIN,
     THRUSTER,
+    MANEUVER,
     Blueprint,
     CellSpec,
     Creature,
@@ -761,6 +762,52 @@ def test_working_thruster_costs_more() -> None:
 
     creature.work_time[(1, 0)] = 10.0
     assert creature.cell_demand((1, 0)) == config.THRUSTER_WORK_UPKEEP
+
+
+def test_maneuver_slows_faster_than_coasting() -> None:
+    """Включённый манёвр сильнее цепляется за воду, чем обычное тело."""
+
+    def after(kind: str, brake: bool) -> float:
+        bp = Blueprint()
+        bp.place(CellSpec((1, 0), kind, group=1, brake=10))
+        creature = Creature(blueprint=bp, x=500.0, y=500.0, vx=400.0)
+        for _ in range(90):
+            if brake:
+                creature.apply_brake({1}, 1 / 60)
+            creature.step(1 / 60)
+        return math.hypot(creature.vx, creature.vy)
+
+    assert after(MANEUVER, True) < after(SKIN, False) * 0.5
+
+
+def test_working_maneuver_costs_its_strength() -> None:
+    """В покое ест 1; полный интервал тормоза силой 5 — ест 5."""
+    bp = Blueprint()
+    bp.place(CellSpec((1, 0), MANEUVER, group=1, brake=5))
+    creature = Creature(blueprint=bp)
+    assert creature.cell_demand((1, 0)) == 1.0
+
+    creature.since_hunger = 10.0
+    creature.work_time[(1, 0)] = 10.0
+    assert creature.cell_demand((1, 0)) == 5.0
+
+    creature.work_time[(1, 0)] = 5.0
+    assert creature.cell_demand((1, 0)) == 3.0
+
+
+def test_maneuver_brake_survives_saving() -> None:
+    bp = Blueprint()
+    bp.place(CellSpec((1, 0), MANEUVER, group=4, brake=3))
+    loaded = Blueprint.from_json(bp.to_json())
+    assert loaded.cells[(1, 0)].kind == MANEUVER
+    assert loaded.cells[(1, 0)].group == 4
+    assert loaded.cells[(1, 0)].brake == 3
+
+    old = '[{"q": 0, "r": 0, "kind": "skin", "dir": 0, "group": 1},'
+    old += ' {"q": 1, "r": 0, "kind": "maneuver", "dir": 0, "group": 2}]'
+    old_bp = Blueprint.from_json(old)
+    assert old_bp.cells[(1, 0)].kind == MANEUVER
+    assert old_bp.cells[(1, 0)].brake == 10
 
 
 def test_photosynth_upkeep_is_fixed_within_an_interval() -> None:

@@ -12,6 +12,7 @@ import random
 from evolution import config, hexgrid
 from evolution.creature import (
     BONE,
+    MANEUVER,
     PROCESSOR,
     SKIN,
     THRUSTER,
@@ -26,6 +27,7 @@ from evolution.food import Crumb
 FORWARD = 1
 TURN_LEFT = 2
 TURN_RIGHT = 3
+BRAKE = 4  # своя цифра, чтобы у еды тормоз не включал двигатель
 
 
 def random_blueprint(points: int, rng: random.Random) -> Blueprint:
@@ -66,6 +68,7 @@ def random_blueprint(points: int, rng: random.Random) -> Blueprint:
     if bones:
         _grow_bones(bp, bones)
     _grow_processors(bp, rng)
+    _grow_maneuvers(bp, rng)
     return bp
 
 
@@ -99,6 +102,7 @@ def _grow_stage(previous: Blueprint, budget: float, rng: random.Random) -> Bluep
             if bp.cost() + extra > budget + 1e-6:
                 break
             bp.cells[coord].kind = BONE
+    _grow_maneuvers(bp, rng)
     return bp
 
 
@@ -125,6 +129,22 @@ def _grow_processors(bp: Blueprint, rng: random.Random) -> None:
     wanted = min(len(skin), 1 if len(bp.cells) < 10 else rng.randint(1, 2))
     for coord in skin[:wanted]:
         bp.cells[coord].kind = PROCESSOR
+
+
+def _grow_maneuvers(bp: Blueprint, rng: random.Random) -> None:
+    """Ставит 1–2 манёвра на кожу, на своей цифре — у еды ими тормозят."""
+    if any(spec.kind == MANEUVER for spec in bp.cells.values()):
+        return
+    skin = [coord for coord, spec in bp.cells.items() if spec.kind == SKIN and coord != (0, 0)]
+    if not skin:
+        return
+    rng.shuffle(skin)
+    wanted = min(len(skin), 1 if rng.random() < 0.65 else 2)
+    for coord in skin[:wanted]:
+        spec = bp.cells[coord]
+        spec.kind = MANEUVER
+        spec.group = BRAKE
+        spec.brake = rng.randint(5, config.MANEUVER_BRAKE_MAX)
 
 
 def _grow_bones(bp: Blueprint, count: int) -> None:
@@ -253,7 +273,7 @@ class EnemyBrain:
                 # крошку надо коснуться кожей, целый обломок — переварить на месте
                 halt = config.FOOD_CRUMB_RADIUS * 2.0 if isinstance(food, Crumb) else config.PROCESS_RADIUS * 2.0
                 if math.hypot(dx, dy) < halt:
-                    return set()
+                    return {spec.group for spec in me.maneuvers()}
                 return steer(me, math.atan2(dy, dx))
 
         if self.wander_timer <= 0.0:

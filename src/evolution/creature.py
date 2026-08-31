@@ -18,8 +18,9 @@ THRUSTER = "thruster"
 PROCESSOR = "processor"
 EYE = "eye"
 PHOTOSYNTH = "photosynth"
+MANEUVER = "maneuver"
 
-KINDS = (SKIN, BONE, THRUSTER, PROCESSOR, EYE, PHOTOSYNTH)
+KINDS = (SKIN, BONE, THRUSTER, PROCESSOR, EYE, PHOTOSYNTH, MANEUVER)
 """Виды клеток в том порядке, в котором их перебирает редактор."""
 
 LOOK_FOOD = "food"
@@ -66,8 +67,17 @@ class CellSpec:
     coord: Coord
     kind: str = SKIN
     direction: int = 0  # для двигателя: куда он толкает (0..5)
-    group: int = 1  # для двигателя: какой цифрой включается (1..9)
+    group: int = 1  # для двигателя и манёвра: какой цифрой включается (1..9)
     look: str = LOOK_FOOD  # для глаза: еда, враг или сторона света
+    brake: int = 10  # для манёвра: сила 1..10 (10%..100%), крутится колёсиком
+
+
+def clamp_brake(value: int) -> int:
+    return max(config.MANEUVER_BRAKE_MIN, min(config.MANEUVER_BRAKE_MAX, int(value)))
+
+
+def copy_spec(spec: CellSpec) -> CellSpec:
+    return CellSpec(spec.coord, spec.kind, spec.direction, spec.group, spec.look, spec.brake)
 
 
 # --------------------------------------------------------------------------
@@ -99,13 +109,15 @@ def cell_upkeep(kind: str, is_brain: bool = False) -> float:
 def cell_work_upkeep(kind: str) -> float:
     """Сколько просит клетка, проработавшая весь удар голода целиком.
 
-    Работают только двигатель (жжёт топливо) и переработчик (топит обломки);
-    остальным работать нечем, для них это просто их обычный аппетит.
+    Работают двигатель, переработчик и манёвр; у манёвра полный аппетит —
+    его сила 1..10, здесь верхняя граница для подсказки в редакторе.
     """
     if kind == THRUSTER:
         return config.THRUSTER_WORK_UPKEEP
     if kind == PROCESSOR:
         return config.PROCESSOR_WORK_UPKEEP
+    if kind == MANEUVER:
+        return float(config.MANEUVER_BRAKE_MAX)
     return cell_upkeep(kind)
 
 
@@ -238,7 +250,7 @@ class Blueprint:
 
     def copy(self) -> Blueprint:
         return Blueprint(
-            {c: CellSpec(s.coord, s.kind, s.direction, s.group, s.look) for c, s in self.cells.items()},
+            {c: copy_spec(s) for c, s in self.cells.items()},
             [Muscle(m.a, m.b, m.group, m.strength) for m in self.muscles],
         )
 
@@ -254,6 +266,7 @@ class Blueprint:
                     "dir": s.direction,
                     "group": s.group,
                     "look": s.look,
+                    "brake": s.brake,
                 }
                 for s in self.cells.values()
             ],
@@ -283,7 +296,14 @@ class Blueprint:
             look = item.get("look", LOOK_FOOD)
             if look not in EYE_LOOKS:
                 look = LOOK_FOOD
-            cells[coord] = CellSpec(coord, kind, int(item["dir"]), int(item["group"]), look)
+            cells[coord] = CellSpec(
+                coord,
+                kind,
+                int(item["dir"]),
+                int(item["group"]),
+                look,
+                clamp_brake(int(item.get("brake", config.MANEUVER_BRAKE_MAX))),
+            )
 
         blueprint = cls(cells)
         for item in raw_muscles:
@@ -394,6 +414,8 @@ def cell_color(coord: Coord, spec: CellSpec, is_player: bool = True) -> tuple[in
         return config.EYE_COLOR if is_player else config.ENEMY_EYE_COLOR
     if spec.kind == PHOTOSYNTH:
         return config.PHOTOSYNTH_COLOR if is_player else config.ENEMY_PHOTOSYNTH_COLOR
+    if spec.kind == MANEUVER:
+        return config.MANEUVER_COLOR if is_player else config.ENEMY_MANEUVER_COLOR
     if spec.kind == BONE:
         return config.BONE_COLOR if is_player else config.ENEMY_BONE_COLOR
     return config.SKIN_COLOR if is_player else config.ENEMY_SKIN_COLOR
@@ -486,6 +508,7 @@ class Creature:
     joints: list[tuple[Coord, Coord, Coord]] = field(default_factory=list)
     pulling: set[int] = field(default_factory=set)  # какие мышцы тянут прямо сейчас
     muscle_work: dict[int, float] = field(default_factory=dict)  # наработка мышц
+    brake_grip: dict[Coord, float] = field(default_factory=dict)  # 0..1, кто тормозит в этом кадре
     # этапы развития: в бою начинает с первого и само зарастает до следующего
     species: Species | None = None
     stage_index: int = 0
@@ -839,7 +862,14 @@ class Creature:
         ]
 
     def groups(self) -> set[int]:
-        return {spec.group for spec in self.thrusters()}
+        return {spec.group for spec in self.thrusters()} | {spec.group for spec in self.maneuvers()}
+
+    def maneuvers(self) -> list[CellSpec]:
+        return [
+            spec
+            for coord, spec in self.blueprint.cells.items()
+            if spec.kind == MANEUVER and coord in self.alive_cells
+        ]
 
     def processors(self) -> list[Coord]:
         """Живые переработчики: только они добывают энергию из обломков."""
@@ -1064,16 +1094,19 @@ class Creature:
     def cell_demand(self, coord: Coord) -> float:
         """Сколько энергии просит клетка за нынешний удар голода.
 
-        Работающей клетке (двигатель жжёт топливо, переработчик топит обломки)
-        считаем по доле времени: работала полинтервала — заплатит середину
-        между «стояла» и «работала».
+        Работающей клетке (двигатель жжёт топливо, переработчик топит обломки,
+        манёвр цепляется за воду) считаем по доле времени: работала полинтервала
+        — заплатит середину между «стояла» и «работала».
         """
         kind = self.kind_of(coord)
         if kind == PHOTOSYNTH:
             return self.photo_upkeep.get(coord, 0.0)
         demand = cell_upkeep(kind, coord == ROOT)
         if coord != ROOT and self.since_hunger > 0.0:
-            extra = cell_work_upkeep(kind) - cell_upkeep(kind)
+            if kind == MANEUVER:
+                extra = float(self.blueprint.cells[coord].brake) - cell_upkeep(kind)
+            else:
+                extra = cell_work_upkeep(kind) - cell_upkeep(kind)
             if extra > 0.0:
                 share = min(1.0, self.work_time.get(coord, 0.0) / self.since_hunger)
                 demand += extra * share
@@ -1338,6 +1371,12 @@ class Creature:
                 )
                 cross_drag *= mult
             along_drag = config.WATER_ALONG_DRAG + config.WATER_QUAD_DRAG * abs(along)
+            grip = self.brake_grip.get(coord, 0.0)
+            if grip > 0.0:
+                # клетка сильнее цепляется за воду — тело тормозит, не разгоняется
+                extra = 1.0 + config.BRAKE_DRAG_GAIN * grip
+                along_drag *= extra
+                cross_drag *= extra
             dfx = -(along * ax * along_drag + cross_x * cross_drag)
             dfy = -(along * ay * along_drag + cross_y * cross_drag)
             ox, oy = self.cell_offset(coord)
@@ -1456,6 +1495,19 @@ class Creature:
         self.vx += fx / self.mass * dt
         self.vy += fy / self.mass * dt
         self.spin += torque / self.inertia * dt
+
+    def apply_brake(self, active_groups: set[int], dt: float) -> None:
+        """Пока держат цифру — манёвр сильнее цепляется за воду.
+
+        Перегрева нет: отпустил кнопку — сцепление пропало. Наработка копится
+        как у двигателя: ест по своей силе и только за отработанное время.
+        """
+        self.brake_grip.clear()
+        for spec in self.maneuvers():
+            if spec.group not in active_groups:
+                continue
+            self.brake_grip[spec.coord] = spec.brake / float(config.MANEUVER_BRAKE_MAX)
+            self.work_time[spec.coord] = self.work_time.get(spec.coord, 0.0) + dt
 
     def soft_step(self, dt: float) -> None:
         """Пересчитывает изгиб тела и собирает клетки, которые перегнуло.

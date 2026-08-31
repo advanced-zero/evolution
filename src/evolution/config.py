@@ -44,12 +44,14 @@ THRUSTER_COLOR = (200, 150, 70)
 PROCESSOR_COLOR = (120, 140, 210)
 EYE_COLOR = (140, 210, 225)
 PHOTOSYNTH_COLOR = (140, 210, 90)
+MANEUVER_COLOR = (200, 90, 130)
 ENEMY_SKIN_COLOR = (180, 90, 100)
 ENEMY_BONE_COLOR = (206, 196, 200)
 ENEMY_THRUSTER_COLOR = (200, 130, 80)
 ENEMY_PROCESSOR_COLOR = (150, 110, 190)
 ENEMY_EYE_COLOR = (150, 90, 150)
 ENEMY_PHOTOSYNTH_COLOR = (140, 170, 90)
+ENEMY_MANEUVER_COLOR = (180, 70, 110)
 CORE_COLOR = (240, 235, 150)
 FOOD_COLOR = (120, 200, 210)
 FLAME_COLOR = (255, 210, 120)
@@ -106,7 +108,15 @@ CELL_RADIUS = HEX_SIZE * 0.92  # радиус кружка для столкно
 CELL_MASS = 1.0  # кожа, двигатель и переработчик
 BONE_MASS = 2.6  # кость тяжелее: медленнее разгон, зато сильнее удар
 # цена клетки в очках постройки
-CELL_COST = {"skin": 1, "thruster": 1, "bone": 3, "processor": 1, "eye": 3, "photosynth": 1}
+CELL_COST = {
+    "skin": 1,
+    "thruster": 1,
+    "bone": 3,
+    "processor": 1,
+    "eye": 3,
+    "photosynth": 1,
+    "maneuver": 1,
+}
 
 # --- мягкое тело ---
 # Кожа гнётся, кость держит форму. Жёсткость — доля от 0 до 1: сколько
@@ -179,6 +189,12 @@ WATER_QUAD_DRAG = 0.010
 # плавником. Обычного дрейфа без мышц это не касается.
 WATER_FIN_ACCEL_MULT = 1.35
 WATER_FIN_BRAKE_MULT = 0.55
+# Маневрирующая клетка: пока держат её цифру, её сопротивление воде
+# умножается на 1 + BRAKE_DRAG_GAIN × (сила/10). 10% — чуть вязче, 100% —
+# почти стоп. Несколько клеток складываются, потому что каждая цепляется сама.
+BRAKE_DRAG_GAIN = 12.0
+MANEUVER_BRAKE_MIN = 1  # 10%
+MANEUVER_BRAKE_MAX = 10  # 100%
 ANGULAR_DRAG = 3.2  # вязкость воды для вращения
 MAX_SPEED = 900.0
 
@@ -243,6 +259,7 @@ FOOD_ENERGY = {
     "processor": 5.0,
     "eye": 15.0,
     "photosynth": 6.0,
+    "maneuver": 5.0,
 }
 BRAIN_FOOD_ENERGY = 30.0  # обломок мозга — самая жирная добыча
 PROCESS_RADIUS = HEX_STEP * 1.0  # в одном гексе от переработчика обломки тают быстрее
@@ -260,6 +277,7 @@ CELL_UPKEEP = {
     "processor": 0.0,
     "eye": 2.0,
     "photosynth": 0.3,  # среднее: см. PHOTOSYNTH_UPKEEP_CHANCE
+    "maneuver": 1.0,
 }
 BRAIN_UPKEEP = 3.0  # мозг ест больше любой обычной клетки
 THRUSTER_WORK_UPKEEP = 3.0  # двигатель, жёгший топливо весь удар голода
@@ -276,7 +294,7 @@ PHOTOSYNTH_ENERGY_GAIN = 1.0  # энергии даёт одна клетка з
 PHOTOSYNTH_UPKEEP_CHANCE = 0.3  # шанс, что она попросит 1 энергию вместо 0
 
 # --- редактор ---
-CELL_BUDGET = 50  # бюджет первого этапа в ОЧКАХ (кожа, двигатель и переработчик по 1, кость 3)
+CELL_BUDGET = 50  # бюджет первого этапа в ОЧКАХ (кожа, двигатель, переработчик и манёвр по 1, кость 3)
 STAGE_MAX = 8  # сколько этапов развития можно нарисовать в редакторе
 # сетка не ограничена кольцами — только бюджетом и связностью; вид можно
 # прокручивать стрелками или средней кнопкой мыши

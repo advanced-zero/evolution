@@ -104,6 +104,23 @@ def test_eye_wheel_cycles_look() -> None:
     assert editor.look == LOOK_FOOD
 
 
+def test_maneuver_wheel_and_digit_keys() -> None:
+    _screen()
+    from evolution.creature import MANEUVER
+    from evolution.editor import EditorScene
+
+    editor = EditorScene(default_blueprint())
+    editor.kind = MANEUVER
+    assert editor.brake == 10
+    editor.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(0, 0), button=5))
+    assert editor.brake == 9
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_q))
+    assert editor.brake == 8
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_5))
+    assert editor.kind == MANEUVER
+    assert editor.group == 5
+
+
 def test_editor_stages_save_and_start_from_first() -> None:
     screen = _screen()
     from evolution.editor import EditorScene

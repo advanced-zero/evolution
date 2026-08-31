@@ -119,11 +119,15 @@ class World:
         if not self.player.is_dead:
             self.player.apply_thrust(player_groups, dt)
             self.player.apply_muscles(player_groups, dt)
+            self.player.apply_brake(player_groups, dt)
+        else:
+            self.player.brake_grip.clear()
         for enemy in self.enemies:
             brain = self.brains[id(enemy)]
             groups = brain.think(enemy, self.player, self.foods, dt, self.crumbs)
             enemy.apply_thrust(groups, dt)
             enemy.apply_muscles(groups, dt)
+            enemy.apply_brake(groups, dt)
 
         for creature in self.creatures():
             creature.step(dt)

@@ -12,6 +12,7 @@ from evolution.creature import (
     KINDS,
     LOOK_ENEMY,
     LOOK_FOOD,
+    MANEUVER,
     PHOTOSYNTH,
     PROCESSOR,
     ROOT,
@@ -23,6 +24,7 @@ from evolution.creature import (
     cell_cost,
     cell_upkeep,
     cell_work_upkeep,
+    clamp_brake,
     default_blueprint,
     food_energy,
     Species,
@@ -81,6 +83,7 @@ class EditorScene:
         self.group = 1
         self.look = LOOK_FOOD  # куда смотрит глаз, крутится колёсиком
         self.strength = 5  # сила мышцы, крутится колёсиком
+        self.brake = 10  # сила манёвра 1..10 (10%..100%)
         self.muscle_start: Coord | None = None  # первый конец начатой мышцы
         self.last_score = last_score
         self.pan = [0.0, 0.0]  # смещение камеры редактора относительно ORIGIN
@@ -136,6 +139,8 @@ class EditorScene:
                     )
                 elif self.kind == EYE:
                     self._cycle_look(step)
+                elif self.kind == MANEUVER:
+                    self._cycle_brake(step)
                 else:
                     self.direction = (self.direction + step) % 6
 
@@ -157,16 +162,20 @@ class EditorScene:
             elif event.key in (pygame.K_q,):
                 if self.kind == EYE:
                     self._cycle_look(-1)
+                elif self.kind == MANEUVER:
+                    self._cycle_brake(-1)
                 else:
                     self.direction = (self.direction - 1) % 6
             elif event.key in (pygame.K_e,):
                 if self.kind == EYE:
                     self._cycle_look(1)
+                elif self.kind == MANEUVER:
+                    self._cycle_brake(1)
                 else:
                     self.direction = (self.direction + 1) % 6
             elif pygame.K_1 <= event.key <= pygame.K_9:
                 self.group = event.key - pygame.K_0
-                if self.kind not in (THRUSTER, MUSCLE):
+                if self.kind not in (THRUSTER, MUSCLE, MANEUVER):
                     self.kind = THRUSTER
             elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 self._start_game()
@@ -182,6 +191,9 @@ class EditorScene:
     def _cycle_look(self, step: int) -> None:
         index = EYE_LOOKS.index(self.look)
         self.look = EYE_LOOKS[(index + step) % len(EYE_LOOKS)]
+
+    def _cycle_brake(self, step: int) -> None:
+        self.brake = clamp_brake(self.brake + step)
 
     def _origin(self) -> tuple[float, float]:
         ox, oy = origin()
@@ -206,10 +218,15 @@ class EditorScene:
                 existing.group = self.group
             elif self.kind == EYE:
                 existing.look = self.look
+            elif self.kind == MANEUVER:
+                existing.group = self.group
+                existing.brake = self.brake
             return
         if self.blueprint.cost() + cell_cost(self.kind) > self._budget() + 1e-6:
             return
-        self.blueprint.place(CellSpec(coord, self.kind, self.direction, self.group, self.look))
+        self.blueprint.place(
+            CellSpec(coord, self.kind, self.direction, self.group, self.look, self.brake)
+        )
 
     def _place_muscle(self, coord: Coord) -> None:
         """Первый клик задаёт один конец верёвки, второй — другой."""
@@ -338,6 +355,8 @@ class EditorScene:
                 self._draw_thruster_marks(surface, center, size, spec.direction, spec.group)
             elif spec.kind == EYE:
                 self._draw_eye_marks(surface, center, size, spec.look)
+            elif spec.kind == MANEUVER:
+                self._draw_maneuver_marks(surface, center, spec.group, spec.brake)
 
         self._draw_muscles(surface, size)
         self._draw_panel(surface)
@@ -398,6 +417,16 @@ class EditorScene:
             dx, dy = compass if compass is not None else (0.0, 0.0)
         pupil = (center[0] + dx * size * 0.28, center[1] + dy * size * 0.28)
         pygame.draw.circle(surface, color, (int(pupil[0]), int(pupil[1])), int(size * 0.22))
+
+    def _draw_maneuver_marks(
+        self,
+        surface: pygame.Surface,
+        center: tuple[float, float],
+        group: int,
+        brake: int,
+    ) -> None:
+        label = self.font.render(f"{group}·{brake * 10}%", True, config.OUTLINE_COLOR)
+        surface.blit(label, label.get_rect(center=center))
 
     def _draw_stage_row(self, surface: pygame.Surface, x: int, y: int) -> int:
         """Кнопки этапов, плюс и минус — куда ткнули, запоминаем в `_stage_hit`."""
@@ -500,6 +529,16 @@ class EditorScene:
             surface.blit(
                 self.small_font.render(
                     t("editor.muscle", strength=self.strength, group=self.group),
+                    True,
+                    config.FG_COLOR,
+                ),
+                (x, y),
+            )
+            y += 20
+        if self.kind == MANEUVER:
+            surface.blit(
+                self.small_font.render(
+                    t("editor.maneuver", percent=self.brake * 10, group=self.group),
                     True,
                     config.FG_COLOR,
                 ),

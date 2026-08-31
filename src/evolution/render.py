@@ -7,7 +7,7 @@ import math
 import pygame
 
 from evolution import config, hexgrid, water
-from evolution.creature import EYE, PROCESSOR, THRUSTER, Creature, cell_color
+from evolution.creature import EYE, MANEUVER, PROCESSOR, THRUSTER, Creature, cell_color
 from evolution.food import Crumb, Food
 from evolution.world import World
 
@@ -175,6 +175,21 @@ def draw_creature(
                 # «выхлоп» бьёт назад
                 flame = (sx - wdx * config.HEX_SIZE * 1.8, sy - wdy * config.HEX_SIZE * 1.8)
                 pygame.draw.line(surface, config.FLAME_COLOR, (sx, sy), flame, 3)
+            if font is not None and creature.is_player:
+                label = font.render(str(spec.group), True, config.OUTLINE_COLOR)
+                surface.blit(label, label.get_rect(center=(sx, sy)))
+
+        if spec.kind == MANEUVER:
+            if spec.group in active_groups:
+                # тормоз: короткие «усы» внутрь клетки, не выхлоп
+                for i in range(3):
+                    angle = creature.angle + i * (math.tau / 3)
+                    dx, dy = math.cos(angle), math.sin(angle)
+                    inner = (
+                        sx - dx * config.HEX_SIZE * 0.55,
+                        sy - dy * config.HEX_SIZE * 0.55,
+                    )
+                    pygame.draw.line(surface, config.ENERGY_LOW_COLOR, (sx, sy), inner, 2)
             if font is not None and creature.is_player:
                 label = font.render(str(spec.group), True, config.OUTLINE_COLOR)
                 surface.blit(label, label.get_rect(center=(sx, sy)))
