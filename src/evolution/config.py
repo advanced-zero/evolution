@@ -9,9 +9,17 @@ import math
 # --- окно ---
 TITLE = "Evolution"
 
-WIDTH = 1280
-HEIGHT = 720
+WINDOW_WIDTH = 1280  # обычное окно; полный экран берёт размер монитора
+WINDOW_HEIGHT = 720
+WIDTH = WINDOW_WIDTH  # текущий размер; settings.apply_display его меняет
+HEIGHT = WINDOW_HEIGHT
 FPS = 60
+
+# --- меню ---
+MENU_DIM_ALPHA = 150
+MENU_PANEL = (22, 28, 42)
+MENU_BUTTON = (40, 48, 68)
+MENU_BUTTON_HOT = (70, 90, 130)
 
 # --- камера боя ---
 # Камера подстраивается под текущий размер существа игрока

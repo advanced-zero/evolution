@@ -6,9 +6,7 @@ import pygame
 
 from evolution import config, creature, hexgrid, render
 from evolution.creature import (
-    BONE,
     EYE,
-    EYE_LOOK_NAMES,
     EYE_LOOKS,
     EYE_LOOK_VECTORS,
     KINDS,
@@ -17,7 +15,6 @@ from evolution.creature import (
     PHOTOSYNTH,
     PROCESSOR,
     ROOT,
-    SKIN,
     THRUSTER,
     Blueprint,
     CellSpec,
@@ -31,116 +28,41 @@ from evolution.creature import (
     Species,
 )
 from evolution.hexgrid import Coord
+from evolution.i18n import HELP_KEYS, KEY_LINES, t
+from evolution.menu import Menu
 
-ORIGIN = (config.WIDTH * 0.36, config.HEIGHT * 0.5)
-PANEL_X = config.WIDTH - 420
+def origin() -> tuple[float, float]:
+    return config.WIDTH * 0.36, config.HEIGHT * 0.5
+
+
+def panel_x() -> int:
+    return config.WIDTH - 420
+
+
+# тесты кликают относительно центра сетки при стандартном окне
+ORIGIN = (config.WINDOW_WIDTH * 0.36, config.WINDOW_HEIGHT * 0.5)
 
 MUSCLE = "muscle"
 """Особый режим редактора: ставим не клетку, а верёвку между двумя клетками."""
 
 MODES = (*KINDS, MUSCLE)
 
-KIND_NAMES = {
-    SKIN: "кожа",
-    BONE: "кость",
-    THRUSTER: "двигатель",
-    PROCESSOR: "переработчик",
-    EYE: "зрительная клетка",
-    PHOTOSYNTH: "фотосинтез",
-    MUSCLE: "мышца",
-}
-
 
 def kind_help(kind: str) -> list[str]:
     """Короткие строки про выбранный вид: как работает, цена, голод, бой."""
-    cost = cell_cost(kind)
-    upkeep = cell_upkeep(kind)
-    work = cell_work_upkeep(kind)
-    food = food_energy(kind)
-    chance = round(config.PHOTOSYNTH_UPKEEP_CHANCE * 100)
-    return {
-        SKIN: [
-            "Мягкая клетка: гнётся, сминается и гасит удар.",
-            "Растягиваться почти не может — щелей нет.",
-            f"Цена {cost}. Аппетит {upkeep:g} за удар голода.",
-            "Двигатель на длинной кожаной ножке толкает вяло.",
-            f"Обломок даёт {food:g} энергии.",
-        ],
-        BONE: [
-            "Твёрдый рычаг: не гнётся и не сминается,",
-            "а мышца её ворочает.",
-            "Соседние кости — один жёсткий кусок.",
-            "Толчок двигателя передаёт целиком.",
-            f"Цена {cost}. Не ест. Тяжёлая — разгон вялее.",
-            "Выбить втрое труднее, сама пробивает",
-            "даже при медленном сближении.",
-            f"Обломок даёт {food:g} энергии.",
-        ],
-        THRUSTER: [
-            "Толкает в сторону стрелки, пока держат цифру.",
-            "На одну цифру можно повесить несколько.",
-            f"Цена {cost}. Аппетит {upkeep:g}, до {work:g}",
-            "если работал весь интервал голода.",
-            f"Слабее вражеского. Держишь {config.THRUSTER_OVERHEAT_TIME:g} с —",
-            f"пауза {config.THRUSTER_COOLDOWN_TIME:g} с, стержень краснеет.",
-            "Короткий импульс, основной ход — плавники.",
-            f"Обломок даёт {food:g} энергии.",
-        ],
-        PROCESSOR: [
-            "Единственный способ съесть обломки:",
-            "касанием они не подбираются.",
-            f"Вплотную топит в {config.PROCESS_SPEEDUP:g} раз быстрее;",
-            "несколько рядом складываются.",
-            "Энергию забирает ближайший в зоне кольца.",
-            "Сытому баку ничего не даёт.",
-            f"Цена {cost}. В покое не ест, за работу — до {work:g}.",
-            f"Обломок даёт {food:g} энергии.",
-        ],
-        EYE: [
-            "Пока жива — расширяет обзор камеры в бою",
-            "(несколько глаз складываются).",
-            "Зрачок: еда, враг или сторона света.",
-            f"Еду и врага дальше {config.EYE_SENSE_RANGE:g} клеток не видит.",
-            f"Цена {cost}. Постоянно ест {upkeep:g}, работы нет.",
-            f"Обломок даёт {food:g} энергии.",
-        ],
-        PHOTOSYNTH: [
-            f"На каждом ударе голода даёт {config.PHOTOSYNTH_ENERGY_GAIN:g} энергии,",
-            "еда для этого не нужна.",
-            f"С шансом {chance}% сама просит 1, иначе 0.",
-            f"Цена {cost}. Как кожа, но очень хрупкая —",
-            "при ударе почти всегда вылетает первой.",
-            f"Обломок даёт {food:g} энергии.",
-        ],
-        MUSCLE: [
-            "Не клетка, а верёвка: пока держат цифру —",
-            "стягивает концы, тело гнётся дугой.",
-            "Отпустили — просто отпускает.",
-            "Цена — по очку за клетку длины.",
-            "Ест только пока работает",
-            "(больше сила — больше аппетит).",
-            "На кости — плавник или челюсть;",
-            "внутри одного костяного куска бесполезна.",
-            "Слишком сильная на тонком теле",
-            "сперва упрётся, потом порвёт.",
-        ],
-    }.get(kind, [])
-
-HELP_LINES = [
-    "ЛКМ — поставить клетку",
-    "ПКМ — убрать клетку",
-    "Tab — сменить, что ставим",
-    "Q, E или колесо — повернуть двигатель",
-    "у глаза колесо — куда смотрит",
-    "1..9 — кнопка двигателя или мышцы",
-    "Мышца: клик по клетке, потом по второй",
-    "колесо — сила мышцы, ПКМ — снять",
-    "Стрелки или средняя кнопка мыши — прокрутка вида",
-    "Enter — играть",
-    "[ ] — другой этап",
-    "+ / − — добавить или убрать этап",
-    "Esc — выход",
-]
+    kwargs = {
+        "cost": cell_cost(kind),
+        "upkeep": cell_upkeep(kind),
+        "work": cell_work_upkeep(kind),
+        "food": food_energy(kind),
+        "chance": round(config.PHOTOSYNTH_UPKEEP_CHANCE * 100),
+        "heat": config.THRUSTER_OVERHEAT_TIME,
+        "cool": config.THRUSTER_COOLDOWN_TIME,
+        "speed": config.PROCESS_SPEEDUP,
+        "range": config.EYE_SENSE_RANGE,
+        "gain": config.PHOTOSYNTH_ENERGY_GAIN,
+    }
+    return [t(key, **kwargs) for key in HELP_KEYS.get(kind, [])]
 
 
 class EditorScene:
@@ -170,6 +92,13 @@ class EditorScene:
         self.time = 0.0
         self.next_scene = None
         self._stage_hit: list[tuple[pygame.Rect, str, int | None]] = []
+        # «Ставим» + настройки вида + описание: пока курсор здесь — виден kind_help
+        self._kind_hover_rect = pygame.Rect(0, 0, 0, 0)
+        self.menu = Menu(from_editor=True)
+
+    @property
+    def wants_quit(self) -> bool:
+        return self.menu.wants_quit
 
     @property
     def blueprint(self) -> Blueprint:
@@ -181,6 +110,8 @@ class EditorScene:
     # --- ввод ---
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        if self.menu.handle_event(event):
+            return
         if event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 2:
                 # средняя кнопка — перетаскивание вида, не ставит клетку
@@ -189,7 +120,7 @@ class EditorScene:
                 return
             if event.button == 1 and self._click_stage_ui(event.pos):
                 return
-            if event.pos[0] >= PANEL_X:
+            if event.pos[0] >= panel_x():
                 return
             coord = self._coord_at(event.pos)
             if event.button == 1:
@@ -253,7 +184,8 @@ class EditorScene:
         self.look = EYE_LOOKS[(index + step) % len(EYE_LOOKS)]
 
     def _origin(self) -> tuple[float, float]:
-        return ORIGIN[0] + self.pan[0], ORIGIN[1] + self.pan[1]
+        ox, oy = origin()
+        return ox + self.pan[0], oy + self.pan[1]
 
     def _coord_at(self, pos: tuple[int, int]) -> Coord:
         ox, oy = self._origin()
@@ -348,17 +280,18 @@ class EditorScene:
     # --- игровой цикл ---
 
     def update(self, dt: float):
-        self.time += dt
-        keys = pygame.key.get_pressed()
-        move = config.EDITOR_PAN_SPEED * dt
-        if keys[pygame.K_LEFT]:
-            self.pan[0] += move
-        if keys[pygame.K_RIGHT]:
-            self.pan[0] -= move
-        if keys[pygame.K_UP]:
-            self.pan[1] += move
-        if keys[pygame.K_DOWN]:
-            self.pan[1] -= move
+        if not self.menu.open:
+            self.time += dt
+            keys = pygame.key.get_pressed()
+            move = config.EDITOR_PAN_SPEED * dt
+            if keys[pygame.K_LEFT]:
+                self.pan[0] += move
+            if keys[pygame.K_RIGHT]:
+                self.pan[0] -= move
+            if keys[pygame.K_UP]:
+                self.pan[1] += move
+            if keys[pygame.K_DOWN]:
+                self.pan[1] -= move
         scene, self.next_scene = self.next_scene, None
         return scene
 
@@ -371,7 +304,8 @@ class EditorScene:
         """
         ox, oy = self._origin()
         size = config.EDITOR_HEX_SIZE
-        corners = [(0, 0), (PANEL_X - 20, 0), (0, config.HEIGHT), (PANEL_X - 20, config.HEIGHT)]
+        px = panel_x()
+        corners = [(0, 0), (px - 20, 0), (0, config.HEIGHT), (px - 20, config.HEIGHT)]
         qs, rs = [], []
         for x, y in corners:
             q, r = hexgrid.pixel_to_hex(x - ox, y - oy, size)
@@ -407,6 +341,7 @@ class EditorScene:
 
         self._draw_muscles(surface, size)
         self._draw_panel(surface)
+        self.menu.draw(surface)
 
     def _cell_center(self, coord: Coord, size: float) -> tuple[float, float]:
         ox, oy = self._origin()
@@ -467,7 +402,7 @@ class EditorScene:
     def _draw_stage_row(self, surface: pygame.Surface, x: int, y: int) -> int:
         """Кнопки этапов, плюс и минус — куда ткнули, запоминаем в `_stage_hit`."""
         self._stage_hit = []
-        surface.blit(self.font.render("Этапы", True, config.FG_COLOR), (x, y))
+        surface.blit(self.font.render(t("editor.stages"), True, config.FG_COLOR), (x, y))
         y += 28
         cursor = x
         for i in range(len(self.species.stages)):
@@ -494,9 +429,9 @@ class EditorScene:
         return y + 34
 
     def _draw_panel(self, surface: pygame.Surface) -> None:
-        x = PANEL_X
+        x = panel_x()
         y = 40
-        title = self.big_font.render("Сборка существа", True, config.FG_COLOR)
+        title = self.big_font.render(t("editor.title"), True, config.FG_COLOR)
         surface.blit(title, (x, y))
         y += 50
         y = self._draw_stage_row(surface, x, y)
@@ -506,15 +441,11 @@ class EditorScene:
         budget = self._budget()
         color = config.FG_COLOR if used <= budget + 1e-6 else (230, 130, 120)
         surface.blit(
-            self.font.render(f"Очки: {used} / {budget:.0f}", True, color), (x, y)
+            self.font.render(t("editor.points", used=used, budget=budget), True, color), (x, y)
         )
         y += 28
         surface.blit(
-            self.font.render(
-                f"Клеток: {len(self.blueprint)}",
-                True,
-                config.FG_COLOR,
-            ),
+            self.font.render(t("editor.cells", n=len(self.blueprint)), True, config.FG_COLOR),
             (x, y),
         )
         y += 28
@@ -523,22 +454,19 @@ class EditorScene:
         appetite = self.blueprint.appetite()
         surface.blit(
             self.font.render(
-                f"Аппетит: {appetite:.0f}   бак: {self.blueprint.tank():.0f}",
+                t("editor.appetite", appetite=appetite, tank=self.blueprint.tank()),
                 True,
                 config.FG_COLOR,
             ),
             (x, y),
         )
         y += 24
-        if self.stage_index == 0:
-            cap_hint = "Первый этап — до 50 очков."
-        else:
-            cap_hint = "Потолок этого этапа — бак предыдущего."
+        cap_hint = t("editor.cap0") if self.stage_index == 0 else t("editor.capn")
         surface.blit(self.small_font.render(cap_hint, True, config.BORDER_COLOR), (x, y))
         y += 22
         if not self.species.valid():
             surface.blit(
-                self.small_font.render("Какой-то этап дороже потолка — в бой нельзя.", True, (230, 130, 120)),
+                self.small_font.render(t("editor.overbudget"), True, (230, 130, 120)),
                 (x, y),
             )
             y += 22
@@ -547,22 +475,21 @@ class EditorScene:
         kinds = {spec.kind for spec in self.blueprint.cells.values()}
         if PROCESSOR not in kinds and PHOTOSYNTH not in kinds:
             warn = (230, 130, 120)
-            for line in (
-                "Без переработчика или клеток фотосинтеза",
-                "существо умрёт с голоду!",
-            ):
-                surface.blit(self.font.render(line, True, warn), (x, y))
+            for key in ("editor.starve1", "editor.starve2"):
+                surface.blit(self.font.render(t(key), True, warn), (x, y))
                 y += 26
         y += 8
 
+        kind_top = y
         surface.blit(
-            self.font.render(f"Ставим: {KIND_NAMES[self.kind]}", True, config.FG_COLOR), (x, y)
+            self.font.render(t("editor.placing", kind=t(f"kind.{self.kind}")), True, config.FG_COLOR),
+            (x, y),
         )
         y += 26
         if self.kind == EYE:
             surface.blit(
                 self.small_font.render(
-                    f"Смотрит: {EYE_LOOK_NAMES[self.look]} (колесо / Q E)",
+                    t("editor.looks", look=t(f"look.{self.look}")),
                     True,
                     config.FG_COLOR,
                 ),
@@ -572,7 +499,7 @@ class EditorScene:
         if self.kind == MUSCLE:
             surface.blit(
                 self.small_font.render(
-                    f"Сила: {self.strength} (колесо)   кнопка: {self.group}",
+                    t("editor.muscle", strength=self.strength, group=self.group),
                     True,
                     config.FG_COLOR,
                 ),
@@ -582,33 +509,37 @@ class EditorScene:
         if self.kind == THRUSTER:
             surface.blit(
                 self.small_font.render(
-                    f"Кнопка двигателя: {self.group}", True, config.FG_COLOR
+                    t("editor.thruster_btn", group=self.group), True, config.FG_COLOR
                 ),
                 (x, y),
             )
             y += 20
-            surface.blit(self.small_font.render("Толкает сюда:", True, config.FG_COLOR), (x, y))
-            self._draw_direction_preview(surface, (x + 190, y + 8))
+            thrust = self.small_font.render(t("editor.thrust_here"), True, config.FG_COLOR)
+            surface.blit(thrust, (x, y))
+            self._draw_direction_preview(surface, (x + thrust.get_width() + 36, y + 8))
             y += 40
-        for line in kind_help(self.kind):
-            surface.blit(self.small_font.render(line, True, config.FG_COLOR), (x, y))
-            y += 20
+        mouse = pygame.mouse.get_pos()
+        if self._kind_hover_rect.collidepoint(mouse):
+            for line in kind_help(self.kind):
+                surface.blit(self.small_font.render(line, True, config.FG_COLOR), (x, y))
+                y += 20
+        self._kind_hover_rect = pygame.Rect(x, kind_top, config.WIDTH - x, y - kind_top)
         if self.kind == MUSCLE and self.muscle_start is not None:
             surface.blit(
-                self.small_font.render("Теперь укажи второй конец", True, config.FOOD_COLOR),
+                self.small_font.render(t("editor.muscle_next"), True, config.FOOD_COLOR),
                 (x, y),
             )
             y += 20
 
         y += 8
-        for line in HELP_LINES:
-            surface.blit(self.small_font.render(line, True, config.FG_COLOR), (x, y))
+        for key in KEY_LINES:
+            surface.blit(self.small_font.render(t(key), True, config.FG_COLOR), (x, y))
             y += 20
 
         if self.last_score is not None:
             y += 20
             surface.blit(
-                self.font.render(f"Прошлый заплыв: {self.last_score} врагов", True, config.FOOD_COLOR),
+                self.font.render(t("editor.last", n=self.last_score), True, config.FOOD_COLOR),
                 (x, y),
             )
 

@@ -10,11 +10,16 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 import pygame
 
-from evolution import config, creature
+from evolution import config, creature, settings
 from evolution.creature import ROOT, CellSpec, Species, default_blueprint
+from evolution.i18n import STRINGS, t
 
-# тест не должен затирать существо, которое собрал игрок
-creature.SAVE_PATH = Path(tempfile.gettempdir()) / "evolution-test" / "creature.json"
+# тест не должен затирать существо и настройки игрока
+_test_dir = Path(tempfile.gettempdir()) / "evolution-test"
+creature.SAVE_PATH = _test_dir / "creature.json"
+settings.SETTINGS_PATH = _test_dir / "settings.json"
+settings.reset()
+settings.save()
 
 
 def _screen() -> pygame.Surface:
@@ -119,6 +124,68 @@ def test_editor_stages_save_and_start_from_first() -> None:
     assert len(play.world.player.species.stages) == 2
     saved = Species.load(creature.SAVE_PATH)
     assert saved is not None and len(saved.stages) == 2
+
+
+def test_esc_menu_pauses_and_returns_to_editor() -> None:
+    screen = _screen()
+    from evolution.editor import EditorScene
+    from evolution.scenes import PlayScene
+
+    editor = EditorScene(default_blueprint())
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
+    assert editor.menu.open
+    editor.draw(screen)
+    # в редакторе «в редактор» просто закрывает меню
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    assert not editor.menu.open
+
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    play = editor.update(1 / 60)
+    assert isinstance(play, PlayScene)
+
+    play.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
+    assert play.menu.open
+    frozen = play.world.time
+    play.update(1 / 60)
+    assert play.world.time == frozen
+    play.draw(screen)
+
+    play.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    play.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    back = play.update(1 / 60)
+    assert isinstance(back, EditorScene)
+
+
+def test_menu_quit_and_language() -> None:
+    screen = _screen()
+    from evolution.editor import EditorScene
+
+    settings.reset()
+    editor = EditorScene(default_blueprint())
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    assert editor.wants_quit
+
+    editor = EditorScene(default_blueprint())
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    editor.draw(screen)
+    assert editor.menu.page == "options"
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    assert settings.language == "en"
+    assert t("menu.title") == "Menu"
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
+    assert editor.menu.page == "root"
+    settings.reset()
+
+
+def test_i18n_keys_match() -> None:
+    assert set(STRINGS["ru"]) == set(STRINGS["en"])
 
 
 if __name__ == "__main__":

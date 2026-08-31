@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import math
 import random
-from typing import TYPE_CHECKING
 
 from evolution import ai, config, physics
 from evolution.creature import ROOT, SKIN, Blueprint, Creature, Species, cell_color, food_energy
 from evolution.food import Crumb, Food
-
-if TYPE_CHECKING:
-    from evolution.cheats import Cheats
 
 __all__ = ["Crumb", "Food", "World"]
 
@@ -117,14 +113,8 @@ class World:
         dt: float,
         player_groups: set[int],
         repairing: bool = False,
-        cheats: "Cheats | None" = None,
     ) -> None:
-        # cheats: см. evolution.cheats.Cheats — необязательный крючок для читов,
-        # чтобы их можно было убрать целиком, удалив cheats.py и эти строки
         self.time += dt
-
-        if cheats is not None and cheats.energy and not self.player.is_dead:
-            self.player.energy = self.player.max_energy
 
         if not self.player.is_dead:
             self.player.apply_thrust(player_groups, dt)
@@ -143,7 +133,7 @@ class World:
                 if coord in creature.alive_cells:
                     self.lose_cell(creature, coord)
 
-        self._collisions(cheats)
+        self._collisions()
         self._hunger()
         self._food(dt)
         self._evolve()
@@ -196,14 +186,11 @@ class World:
     def _shatter(self, food: Food) -> None:
         self.crumbs.extend(food.shatter())
 
-    def _collisions(self, cheats: "Cheats | None" = None) -> None:
-        invuln = cheats is not None and cheats.invuln
+    def _collisions(self) -> None:
         creatures = self.creatures()
         for i, a in enumerate(creatures):
             for b in creatures[i + 1 :]:
                 for creature, coord in physics.collide_pair(a, b):
-                    if invuln and creature is self.player:
-                        continue
                     self.lose_cell(creature, coord)
 
         gone_food: set[int] = set()
@@ -216,8 +203,6 @@ class World:
                 if hit is None:
                     continue
                 for coord in hit.cells:
-                    if invuln and creature is self.player:
-                        continue
                     self.lose_cell(creature, coord)
                 if hit.shatter:
                     self._shatter(food)
@@ -267,8 +252,6 @@ class World:
         for creature in self.creatures():
             for crumb in self.crumbs:
                 for who, coord in physics.collide_creature_crumb(creature, crumb):
-                    if invuln and who is self.player:
-                        continue
                     self.lose_cell(who, coord)
 
         for food in self.foods:

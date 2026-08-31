@@ -5,9 +5,10 @@ from __future__ import annotations
 import pygame
 
 from evolution import config, render
-from evolution.cheats import Cheats
 from evolution.creature import Blueprint, Species
 from evolution.editor import EditorScene
+from evolution.i18n import t
+from evolution.menu import Menu
 from evolution.world import World
 
 __all__ = ["EditorScene", "PlayScene", "GameOverScene"]
@@ -23,15 +24,25 @@ class PlayScene:
         self.world = World(self.species)
         self.active_groups: set[int] = set()
         self.repairing = False
-        self.cheats = Cheats()
         self.font = render.get_font(20)
         self.small_font = render.get_font(16)
         self.death_delay = 0.0
         self.next_scene = None
         self._world_surface: pygame.Surface | None = None
         self._world_surface_size: tuple[int, int] | None = None
+        self.menu = Menu(from_editor=False)
+
+    @property
+    def wants_quit(self) -> bool:
+        return self.menu.wants_quit
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        was_open = self.menu.open
+        if self.menu.handle_event(event):
+            if self.menu.open and not was_open:
+                self.active_groups.clear()
+                self.repairing = False
+            return
         if event.type == pygame.KEYDOWN and pygame.K_1 <= event.key <= pygame.K_9:
             self.active_groups.add(event.key - pygame.K_0)
         elif event.type == pygame.KEYUP and pygame.K_1 <= event.key <= pygame.K_9:
@@ -40,11 +51,13 @@ class PlayScene:
             self.repairing = True
         elif event.type == pygame.KEYUP and event.key == pygame.K_r:
             self.repairing = False
-        else:
-            self.cheats.handle_event(event, self.world)
 
     def update(self, dt: float):
-        self.world.update(dt, self.active_groups, self.repairing, self.cheats)
+        if self.menu.wants_editor:
+            return EditorScene(self.species)
+        if self.menu.open:
+            return None
+        self.world.update(dt, self.active_groups, self.repairing)
         if self.world.player.is_dead:
             self.death_delay += dt
             if self.death_delay > 1.2:
@@ -95,15 +108,18 @@ class PlayScene:
         pygame.transform.smoothscale(world_surface, (real_width, real_height), surface)
 
         self._draw_hud(surface)
+        self.menu.draw(surface)
 
     def _draw_hud(self, surface: pygame.Surface) -> None:
         player = self.world.player
+        stages = len(player.species.stages) if player.species else 1
+        groups = " ".join(str(g) for g in sorted(player.groups())) or t("play.thrusters.none")
         lines = [
-            f"Съедено врагов: {self.world.kills}",
-            f"Этап: {player.stage_index + 1} / {len(player.species.stages) if player.species else 1}"
-            + ("  растёт…" if player.evolving else ""),
-            f"Клетки: {len(player.alive_cells)} / {len(player.blueprint.cells)}",
-            "Двигатели: " + (" ".join(str(g) for g in sorted(player.groups())) or "нет"),
+            t("play.kills", n=self.world.kills),
+            t("play.stage", cur=player.stage_index + 1, total=stages)
+            + (t("play.growing") if player.evolving else ""),
+            t("play.cells", alive=len(player.alive_cells), total=len(player.blueprint.cells)),
+            t("play.thrusters", groups=groups),
         ]
         y = 14
         for line in lines:
@@ -112,34 +128,25 @@ class PlayScene:
 
         render.draw_energy_bar(surface, (16, y + 4, 220, 14), player.energy, player.max_energy)
         y += 24
-        energy_line = (
-            f"Энергия: {player.energy:.0f} / {player.max_energy:.0f}"
-            f"   голод через {max(0.0, player.hunger_timer):.0f} с"
+        energy_line = t(
+            "play.energy",
+            cur=player.energy,
+            max=player.max_energy,
+            hunger=max(0.0, player.hunger_timer),
         )
         surface.blit(self.small_font.render(energy_line, True, config.FG_COLOR), (16, y))
         y += 20
         cost = player.next_evolve_cost()
         if player.evolving:
-            grow = "Тело зарастает на следующий этап. R сейчас не действует."
+            grow = t("play.grow.evolving")
         elif cost is not None:
-            need = max(0.0, cost - player.energy)
-            grow = f"До следующего этапа нужно {need:.0f} энергии."
+            grow = t("play.grow.need", need=max(0.0, cost - player.energy))
         else:
-            grow = "Дальше расти некуда."
+            grow = t("play.grow.done")
         surface.blit(self.small_font.render(grow, True, config.BORDER_COLOR), (16, y))
 
-        hint = self.small_font.render(
-            "Цифры — двигатели, R — залечить дырки за энергию, Esc — выход. "
-            + self.cheats.hint_line(),
-            True,
-            config.BORDER_COLOR,
-        )
+        hint = self.small_font.render(t("play.hint"), True, config.BORDER_COLOR)
         surface.blit(hint, (16, config.HEIGHT - 28))
-
-        status = self.cheats.status_line()
-        if status is not None:
-            cheat_line = self.small_font.render(status, True, config.ENEMY_SKIN_COLOR)
-            surface.blit(cheat_line, (16, config.HEIGHT - 48))
 
 
 class GameOverScene:
@@ -154,8 +161,15 @@ class GameOverScene:
         self.big_font = render.get_font(48, bold=True)
         self.time = 0.0
         self.next_scene = None
+        self.menu = Menu(from_editor=False)
+
+    @property
+    def wants_quit(self) -> bool:
+        return self.menu.wants_quit
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        if self.menu.handle_event(event):
+            return
         if event.type == pygame.KEYDOWN and event.key in (
             pygame.K_RETURN,
             pygame.K_KP_ENTER,
@@ -164,18 +178,22 @@ class GameOverScene:
             self.next_scene = EditorScene(self.species, last_score=self.kills)
 
     def update(self, dt: float):
-        self.time += dt
+        if self.menu.wants_editor:
+            return EditorScene(self.species, last_score=self.kills)
+        if not self.menu.open:
+            self.time += dt
         scene, self.next_scene = self.next_scene, None
         return scene
 
     def draw(self, surface: pygame.Surface) -> None:
         render.draw_background(surface, render.calm_camera(self.time), self.time, calm=True)
         center_x = config.WIDTH // 2
-        title = self.big_font.render("Существо погибло", True, config.ENEMY_SKIN_COLOR)
+        title = self.big_font.render(t("over.title"), True, config.ENEMY_SKIN_COLOR)
         surface.blit(title, title.get_rect(center=(center_x, config.HEIGHT // 2 - 60)))
 
-        score = self.font.render(f"Съедено врагов: {self.kills}", True, config.FG_COLOR)
+        score = self.font.render(t("over.kills", n=self.kills), True, config.FG_COLOR)
         surface.blit(score, score.get_rect(center=(center_x, config.HEIGHT // 2)))
 
-        hint = self.font.render("Enter — собрать существо заново", True, config.BORDER_COLOR)
+        hint = self.font.render(t("over.hint"), True, config.BORDER_COLOR)
         surface.blit(hint, hint.get_rect(center=(center_x, config.HEIGHT // 2 + 50)))
+        self.menu.draw(surface)

@@ -2,13 +2,16 @@
 
 import pygame
 
-from evolution import config
+from evolution import config, settings
+from evolution.water import sync_window
 
 
 class Game:
     def __init__(self) -> None:
         pygame.init()
-        self.screen = pygame.display.set_mode((config.WIDTH, config.HEIGHT))
+        settings.load()
+        self.screen = settings.apply_display()
+        sync_window()
         pygame.display.set_caption(config.TITLE)
         self.clock = pygame.time.Clock()
         self.running = False
@@ -22,6 +25,9 @@ class Game:
         while self.running:
             dt = min(self.clock.tick(config.FPS) / 1000.0, 0.05)
             self.handle_events()
+            if getattr(self.scene, "wants_quit", False):
+                self.running = False
+                break
             next_scene = self.scene.update(dt)
             if next_scene is not None:
                 self.scene = next_scene
@@ -33,7 +39,9 @@ class Game:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                self.running = False
             else:
                 self.scene.handle_event(event)
+                surface = pygame.display.get_surface()
+                if surface is not None and surface is not self.screen:
+                    self.screen = surface
+                    sync_window()

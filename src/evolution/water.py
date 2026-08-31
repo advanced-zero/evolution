@@ -121,12 +121,15 @@ class _Water:
         self.motes = self._build_motes(rng)
         self.bubbles = self._build_bubbles(rng)
         self.edges = self._build_edges()
-        self.dim = pygame.Surface((config.WIDTH, config.HEIGHT))
-        self.dim.fill(config.WATER_VOID_COLOR)
-        self.dim.set_alpha(config.WATER_CALM_DIM)
         self.bubble_buf = pygame.Surface(
             (int(config.WATER_BUBBLE_SIZE * 2 + 6),) * 2, pygame.SRCALPHA
         )
+        self._make_dim()
+
+    def _make_dim(self) -> None:
+        self.dim = pygame.Surface((config.WIDTH, config.HEIGHT))
+        self.dim.fill(config.WATER_VOID_COLOR)
+        self.dim.set_alpha(config.WATER_CALM_DIM)
 
     # карта моря: три октавы шума, растянутые на весь мир
     def _build_map(self, rng: random.Random) -> pygame.Surface:
@@ -300,6 +303,15 @@ def prepare() -> _Water:
     if _cache is None:
         _cache = _Water()
     return _cache
+
+
+def sync_window() -> None:
+    """После смены размера окна спокойный слой должен совпасть с экраном."""
+    if _cache is None:
+        return
+    if _cache.dim.get_size() != (config.WIDTH, config.HEIGHT):
+        _cache._make_dim()
+        _cache.edges = _cache._build_edges()
 
 
 # --- отрисовка кадра ---
