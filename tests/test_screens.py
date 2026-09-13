@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -10,16 +11,28 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 import pygame
 
-from evolution import config, creature, settings
+from evolution import config, creature, saves, settings
 from evolution.creature import ROOT, CellSpec, Species, default_blueprint
 from evolution.i18n import STRINGS, t
 
 # тест не должен затирать существо и настройки игрока
 _test_dir = Path(tempfile.gettempdir()) / "evolution-test"
 creature.SAVE_PATH = _test_dir / "creature.json"
+saves.DATA_DIR = _test_dir
 settings.SETTINGS_PATH = _test_dir / "settings.json"
 settings.reset()
 settings.save()
+
+
+def _clear_saves() -> None:
+    folder = saves.saves_dir()
+    if folder.is_dir():
+        shutil.rmtree(folder, ignore_errors=True)
+    for path in (creature.SAVE_PATH, saves.index_path()):
+        if path.is_file():
+            path.unlink()
+    # пустой индекс, чтобы старый creature.json не подтянулся снова
+    saves._write_index([], None)
 
 
 def _screen() -> pygame.Surface:
@@ -152,8 +165,8 @@ def test_esc_menu_pauses_and_returns_to_editor() -> None:
     editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
     assert editor.menu.open
     editor.draw(screen)
-    # в редакторе «в редактор» просто закрывает меню
-    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    # Esc ещё раз закрывает меню, не выходя в главное
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
     assert not editor.menu.open
 
     editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
@@ -184,7 +197,10 @@ def test_menu_quit_and_language() -> None:
     editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
     editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
     editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
-    assert editor.wants_quit
+    from evolution.scenes import MainMenuScene
+
+    assert not editor.wants_quit
+    assert isinstance(editor.update(1 / 60), MainMenuScene)
 
     editor = EditorScene(default_blueprint())
     editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
@@ -203,6 +219,75 @@ def test_menu_quit_and_language() -> None:
 
 def test_i18n_keys_match() -> None:
     assert set(STRINGS["ru"]) == set(STRINGS["en"])
+
+
+def test_main_menu_play_without_saves_opens_editor() -> None:
+    screen = _screen()
+    from evolution.editor import EditorScene
+    from evolution.scenes import MainMenuScene
+
+    _clear_saves()
+    menu = MainMenuScene()
+    menu.draw(screen)
+    menu.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    next_scene = menu.update(1 / 60)
+    assert isinstance(next_scene, EditorScene)
+    assert next_scene.save_id is not None
+    assert saves.list_saves()
+
+
+def test_main_menu_play_with_save_opens_fight() -> None:
+    screen = _screen()
+    from evolution.scenes import MainMenuScene, PlayScene
+
+    _clear_saves()
+    saves.create_new()
+    menu = MainMenuScene()
+    menu.draw(screen)
+    menu.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    next_scene = menu.update(1 / 60)
+    assert isinstance(next_scene, PlayScene)
+
+
+def test_saves_new_creature_opens_editor() -> None:
+    screen = _screen()
+    from evolution.editor import EditorScene
+    from evolution.scenes import MainMenuScene
+
+    _clear_saves()
+    menu = MainMenuScene()
+    menu.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
+    menu.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    assert menu.page == "saves"
+    menu.draw(screen)
+    menu.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    next_scene = menu.update(1 / 60)
+    assert isinstance(next_scene, EditorScene)
+    assert len(saves.list_saves()) == 1
+
+
+def test_editor_esc_menu_returns_to_main() -> None:
+    screen = _screen()
+    from evolution.editor import EditorScene
+    from evolution.scenes import MainMenuScene
+
+    editor = EditorScene(default_blueprint())
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
+    editor.draw(screen)
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    next_scene = editor.update(1 / 60)
+    assert isinstance(next_scene, MainMenuScene)
+
+
+def test_legacy_creature_json_migrates() -> None:
+    _clear_saves()
+    saves.index_path().unlink()
+    Species([default_blueprint()]).save(creature.SAVE_PATH)
+    listed = saves.list_saves()
+    assert len(listed) == 1
+    loaded = saves.load_current()
+    assert loaded is not None
+    assert ROOT in loaded.stages[0].cells
 
 
 if __name__ == "__main__":

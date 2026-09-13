@@ -16,9 +16,9 @@ class Game:
         self.clock = pygame.time.Clock()
         self.running = False
 
-        from evolution.scenes import EditorScene
+        from evolution.scenes import MainMenuScene
 
-        self.scene = EditorScene()
+        self.scene = MainMenuScene()
 
     def run(self) -> None:
         self.running = True

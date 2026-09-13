@@ -32,6 +32,7 @@ class Menu:
         self.index = 0
         self.wants_quit = False
         self.wants_editor = False
+        self.wants_menu = False
         self.font = render.get_font(22)
         self.big_font = render.get_font(36, bold=True)
         self._items: list[_Item] = []
@@ -42,6 +43,7 @@ class Menu:
         self.index = 0
         self.wants_quit = False
         self.wants_editor = False
+        self.wants_menu = False
 
     def hide(self) -> None:
         self.open = False
@@ -103,7 +105,10 @@ class Menu:
         if not (0 <= index < len(specs)):
             return
         action = specs[index][0]
-        if action == "editor":
+        if action == "main":
+            self.wants_menu = True
+            self.hide()
+        elif action == "editor":
             if self.from_editor:
                 self.hide()
             else:
@@ -122,7 +127,8 @@ class Menu:
         elif action == "language":
             settings.cycle_language()
         elif action == "confirm_quit":
-            self.wants_quit = True
+            self.wants_menu = True
+            self.hide()
         elif action == "confirm_editor":
             self.wants_editor = True
             self.hide()
@@ -148,7 +154,7 @@ class Menu:
         title_key = {
             PAGE_ROOT: "menu.title",
             PAGE_OPTIONS: "opt.title",
-            PAGE_CONFIRM_QUIT: "menu.confirm_quit",
+            PAGE_CONFIRM_QUIT: "menu.confirm_menu",
             PAGE_CONFIRM_EDITOR: "menu.confirm_editor",
         }[self.page]
         title_font = self.font if self.page.startswith("confirm") else self.big_font
@@ -175,8 +181,9 @@ class Menu:
 
     def _page_specs(self) -> list[tuple[str, str]]:
         if self.page == PAGE_ROOT:
+            first = ("main", t("menu.main")) if self.from_editor else ("editor", t("menu.editor"))
             return [
-                ("editor", t("menu.editor")),
+                first,
                 ("options", t("menu.options")),
                 ("quit", t("menu.quit")),
             ]

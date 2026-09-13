@@ -57,7 +57,7 @@ ROOT: Coord = (0, 0)
 """
 
 SAVE_PATH = Path.home() / ".local" / "share" / "evolution" / "creature.json"
-"""Куда сохраняется собранное игроком существо."""
+"""Старый одиночный файл; новые сохранения — в `saves/` (см. `saves.py`)."""
 
 
 @dataclass
@@ -336,16 +336,17 @@ class Blueprint:
 class Species:
     """Цепочка этапов одного существа: в бою оно начинает с первого и линяет дальше."""
 
-    def __init__(self, stages: list[Blueprint] | None = None) -> None:
+    def __init__(self, stages: list[Blueprint] | None = None, name: str = "") -> None:
         self.stages: list[Blueprint] = [s.copy() for s in stages] if stages else [Blueprint()]
         if not self.stages:
             self.stages = [Blueprint()]
+        self.name = name
 
     def __len__(self) -> int:
         return len(self.stages)
 
     def copy(self) -> Species:
-        return Species(self.stages)
+        return Species(self.stages, name=self.name)
 
     def budget(self, index: int) -> float:
         """Потолок очков этапа: у первого 50, у следующего — бак предыдущего."""
@@ -357,14 +358,20 @@ class Species:
         return all(stage.cost() <= self.budget(i) + 1e-6 for i, stage in enumerate(self.stages))
 
     def to_json(self) -> str:
-        return json.dumps({"stages": [stage.to_dict() for stage in self.stages]})
+        data: dict = {"stages": [stage.to_dict() for stage in self.stages]}
+        if self.name:
+            data["name"] = self.name
+        return json.dumps(data)
 
     @classmethod
     def from_json(cls, text: str) -> Species:
         data = json.loads(text)
         if isinstance(data, dict) and "stages" in data:
             stages = [Blueprint.from_dict(item) for item in data["stages"]]
-            return cls(stages or [Blueprint()])
+            name = data.get("name", "")
+            if not isinstance(name, str):
+                name = ""
+            return cls(stages or [Blueprint()], name=name)
         return cls([Blueprint.from_dict(data)])
 
     def save(self, path: Path) -> None:

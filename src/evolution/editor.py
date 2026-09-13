@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pygame
 
-from evolution import config, creature, hexgrid, render
+from evolution import config, creature, hexgrid, render, saves
 from evolution.creature import (
     EYE,
     EYE_LOOKS,
@@ -70,13 +70,23 @@ def kind_help(kind: str) -> list[str]:
 class EditorScene:
     """Собираем существо из гексов в пределах бюджета клеток."""
 
-    def __init__(self, species: Species | Blueprint | None = None, last_score: int | None = None) -> None:
+    def __init__(
+        self,
+        species: Species | Blueprint | None = None,
+        last_score: int | None = None,
+        save_id: str | None = None,
+    ) -> None:
         if species is None:
-            loaded = Species.load(creature.SAVE_PATH)
-            species = loaded if loaded is not None else Species([default_blueprint()])
+            loaded = saves.load_current()
+            if loaded is not None:
+                species = loaded
+                save_id = saves.current_id()
+            else:
+                species = Species([default_blueprint()])
         elif isinstance(species, Blueprint):
             species = Species([species])
         self.species = species.copy()
+        self.save_id = save_id
         self.stage_index = 0
         self.kind = THRUSTER
         self.direction = 0
@@ -286,17 +296,28 @@ class EditorScene:
             return True
         return False
 
+    def _persist(self) -> None:
+        if self.save_id:
+            saves.save_species(self.save_id, self.species)
+        else:
+            self.species.save(creature.SAVE_PATH)
+
     def _start_game(self) -> None:
         from evolution.scenes import PlayScene  # поздний импорт: экраны ссылаются друг на друга
 
         if not self.species.valid():
             return
-        self.species.save(creature.SAVE_PATH)
-        self.next_scene = PlayScene(self.species)
+        self._persist()
+        self.next_scene = PlayScene(self.species, save_id=self.save_id)
 
     # --- игровой цикл ---
 
     def update(self, dt: float):
+        if self.menu.wants_menu:
+            self._persist()
+            from evolution.scenes import MainMenuScene
+
+            return MainMenuScene()
         if not self.menu.open:
             self.time += dt
             keys = pygame.key.get_pressed()

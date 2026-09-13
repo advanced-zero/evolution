@@ -1181,6 +1181,14 @@ def test_old_save_loads_as_one_stage() -> None:
     species = Species.from_json(old)
     assert len(species.stages) == 1
     assert ROOT in species.stages[0].cells
+    assert species.name == ""
+
+
+def test_species_keeps_name() -> None:
+    species = Species([default_blueprint()], name="Акула")
+    loaded = Species.from_json(species.to_json())
+    assert loaded.name == "Акула"
+    assert loaded.copy().name == "Акула"
 
 
 def test_next_stage_budget_is_previous_tank() -> None:

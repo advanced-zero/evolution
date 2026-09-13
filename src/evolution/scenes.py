@@ -1,26 +1,214 @@
-"""Экраны игры и переходы между ними: редактор → бой → гибель → редактор."""
+"""Экраны игры и переходы между ними: меню → редактор → бой → гибель."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pygame
 
-from evolution import config, render
+from evolution import config, render, saves, settings
 from evolution.creature import Blueprint, Species
 from evolution.editor import EditorScene
 from evolution.i18n import t
 from evolution.menu import Menu
 from evolution.world import World
 
-__all__ = ["EditorScene", "PlayScene", "GameOverScene"]
+__all__ = ["MainMenuScene", "EditorScene", "PlayScene", "GameOverScene"]
+
+PAGE_ROOT = "root"
+PAGE_SAVES = "saves"
+PAGE_OPTIONS = "options"
+PAGE_CONFIRM_QUIT = "confirm_quit"
+
+
+@dataclass
+class _MenuItem:
+    action: str
+    rect: pygame.Rect
+    payload: str | None = None
+
+
+class MainMenuScene:
+    """Первый экран: играть, сохранения, настройки, выход."""
+
+    def __init__(self) -> None:
+        self.page = PAGE_ROOT
+        self.index = 0
+        self.wants_quit = False
+        self.font = render.get_font(22)
+        self.big_font = render.get_font(48, bold=True)
+        self.time = 0.0
+        self.next_scene = None
+        self._items: list[_MenuItem] = []
+
+    def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self._back()
+                return
+            if event.key in (pygame.K_UP, pygame.K_w):
+                self._move(-1)
+                return
+            if event.key in (pygame.K_DOWN, pygame.K_s):
+                self._move(1)
+                return
+            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                self._activate(self.index)
+                return
+        elif event.type == pygame.MOUSEMOTION:
+            for i, item in enumerate(self._items):
+                if item.rect.collidepoint(event.pos):
+                    self.index = i
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for i, item in enumerate(self._items):
+                if item.rect.collidepoint(event.pos):
+                    self.index = i
+                    self._activate(i)
+                    break
+
+    def update(self, dt: float):
+        self.time += dt
+        scene, self.next_scene = self.next_scene, None
+        return scene
+
+    def _back(self) -> None:
+        if self.page == PAGE_ROOT:
+            return
+        self.page = PAGE_ROOT
+        self.index = 0
+
+    def _move(self, step: int) -> None:
+        n = len(self._specs())
+        if n == 0:
+            return
+        self.index = (self.index + step) % n
+
+    def _specs(self) -> list[tuple[str, str, str | None]]:
+        if self.page == PAGE_ROOT:
+            return [
+                ("play", t("main.play"), None),
+                ("saves", t("main.saves"), None),
+                ("options", t("menu.options"), None),
+                ("quit", t("menu.quit"), None),
+            ]
+        if self.page == PAGE_SAVES:
+            rows: list[tuple[str, str, str | None]] = [("new", t("main.new"), None)]
+            current = saves.current_id()
+            for info in saves.list_saves():
+                label = (
+                    t("saves.current", name=info.name)
+                    if info.id == current
+                    else info.name
+                )
+                rows.append(("open", label, info.id))
+            rows.append(("back", t("menu.back"), None))
+            return rows
+        if self.page == PAGE_OPTIONS:
+            on = t("opt.fullscreen.on") if settings.fullscreen else t("opt.fullscreen.off")
+            lang = t("opt.lang.ru") if settings.language == settings.LANG_RU else t("opt.lang.en")
+            return [
+                ("fullscreen", t("opt.fullscreen", value=on), None),
+                ("language", t("opt.language", value=lang), None),
+                ("back", t("menu.back"), None),
+            ]
+        yes, no = t("menu.yes"), t("menu.no")
+        return [("confirm_quit", yes, None), ("cancel", no, None)]
+
+    def _activate(self, index: int) -> None:
+        specs = self._specs()
+        if not (0 <= index < len(specs)):
+            return
+        action, _label, payload = specs[index]
+        if action == "play":
+            self._play()
+        elif action == "saves":
+            self.page = PAGE_SAVES
+            self.index = 0
+        elif action == "options":
+            self.page = PAGE_OPTIONS
+            self.index = 0
+        elif action == "quit":
+            self.page = PAGE_CONFIRM_QUIT
+            self.index = 0
+        elif action == "back":
+            self._back()
+        elif action == "fullscreen":
+            settings.toggle_fullscreen()
+        elif action == "language":
+            settings.cycle_language()
+        elif action == "confirm_quit":
+            self.wants_quit = True
+        elif action == "cancel":
+            self.page = PAGE_ROOT
+            self.index = 0
+        elif action == "new":
+            save_id, species = saves.create_new()
+            self.next_scene = EditorScene(species, save_id=save_id)
+        elif action == "open" and payload:
+            saves.set_current(payload)
+            species = saves.load(payload)
+            if species is None:
+                return
+            self.next_scene = EditorScene(species, save_id=payload)
+
+    def _play(self) -> None:
+        current = saves.load_current()
+        save_id = saves.current_id()
+        if current is None or save_id is None:
+            save_id, species = saves.create_new()
+            self.next_scene = EditorScene(species, save_id=save_id)
+            return
+        if current.valid():
+            self.next_scene = PlayScene(current, save_id=save_id)
+        else:
+            self.next_scene = EditorScene(current, save_id=save_id)
+
+    def draw(self, surface: pygame.Surface) -> None:
+        render.draw_background(surface, render.calm_camera(self.time), self.time, calm=True)
+        specs = self._specs()
+        panel_h = 90 + 50 * len(specs) + 36
+        panel = pygame.Rect(0, 0, 520, min(panel_h, config.HEIGHT - 40))
+        panel.center = (config.WIDTH // 2, config.HEIGHT // 2)
+        pygame.draw.rect(surface, config.MENU_PANEL, panel, border_radius=12)
+        pygame.draw.rect(surface, config.BORDER_COLOR, panel, width=1, border_radius=12)
+
+        title_key = {
+            PAGE_ROOT: "main.title",
+            PAGE_SAVES: "saves.title",
+            PAGE_OPTIONS: "opt.title",
+            PAGE_CONFIRM_QUIT: "menu.confirm_quit",
+        }[self.page]
+        title_font = self.font if self.page == PAGE_CONFIRM_QUIT else self.big_font
+        title = title_font.render(t(title_key), True, config.FG_COLOR)
+        surface.blit(title, title.get_rect(center=(panel.centerx, panel.top + 36)))
+
+        self._items = []
+        y = panel.top + 80
+        for i, (action, label, payload) in enumerate(specs):
+            rect = pygame.Rect(panel.left + 40, y, panel.width - 80, 40)
+            hot = i == self.index
+            pygame.draw.rect(
+                surface,
+                config.MENU_BUTTON_HOT if hot else config.MENU_BUTTON,
+                rect,
+                border_radius=8,
+            )
+            text = self.font.render(label, True, config.FG_COLOR)
+            surface.blit(text, text.get_rect(center=rect.center))
+            self._items.append(_MenuItem(action, rect, payload))
+            y += 50
+        if self._items:
+            self.index %= len(self._items)
 
 
 class PlayScene:
     """Бой: плаваем, таранимся, подбираем клетки."""
 
-    def __init__(self, species: Species | Blueprint) -> None:
+    def __init__(self, species: Species | Blueprint, save_id: str | None = None) -> None:
         if isinstance(species, Blueprint):
             species = Species([species])
         self.species = species.copy()
+        self.save_id = save_id
         self.world = World(self.species)
         self.active_groups: set[int] = set()
         self.repairing = False
@@ -54,14 +242,16 @@ class PlayScene:
 
     def update(self, dt: float):
         if self.menu.wants_editor:
-            return EditorScene(self.species)
+            return EditorScene(self.species, save_id=self.save_id)
+        if self.menu.wants_menu:
+            return MainMenuScene()
         if self.menu.open:
             return None
         self.world.update(dt, self.active_groups, self.repairing)
         if self.world.player.is_dead:
             self.death_delay += dt
             if self.death_delay > 1.2:
-                return GameOverScene(self.species, self.world.kills)
+                return GameOverScene(self.species, self.world.kills, save_id=self.save_id)
         return None
 
     def _camera_zoom(self) -> float:
@@ -152,11 +342,12 @@ class PlayScene:
 class GameOverScene:
     """Существо погибло — показываем счёт и возвращаем в редактор."""
 
-    def __init__(self, species: Species | Blueprint, kills: int) -> None:
+    def __init__(self, species: Species | Blueprint, kills: int, save_id: str | None = None) -> None:
         if isinstance(species, Blueprint):
             species = Species([species])
         self.species = species
         self.kills = kills
+        self.save_id = save_id
         self.font = render.get_font(24)
         self.big_font = render.get_font(48, bold=True)
         self.time = 0.0
@@ -175,11 +366,13 @@ class GameOverScene:
             pygame.K_KP_ENTER,
             pygame.K_SPACE,
         ):
-            self.next_scene = EditorScene(self.species, last_score=self.kills)
+            self.next_scene = EditorScene(self.species, last_score=self.kills, save_id=self.save_id)
 
     def update(self, dt: float):
         if self.menu.wants_editor:
-            return EditorScene(self.species, last_score=self.kills)
+            return EditorScene(self.species, last_score=self.kills, save_id=self.save_id)
+        if self.menu.wants_menu:
+            return MainMenuScene()
         if not self.menu.open:
             self.time += dt
         scene, self.next_scene = self.next_scene, None
