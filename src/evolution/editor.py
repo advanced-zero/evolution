@@ -34,15 +34,15 @@ from evolution.i18n import HELP_KEYS, KEY_LINES, t
 from evolution.menu import Menu
 
 def origin() -> tuple[float, float]:
-    return config.WIDTH * 0.36, config.HEIGHT * 0.5
-
-
-def panel_x() -> int:
-    return config.WIDTH - 420
+    return config.WIDTH * 0.5, config.HEIGHT * 0.5
 
 
 # тесты кликают относительно центра сетки при стандартном окне
-ORIGIN = (config.WINDOW_WIDTH * 0.36, config.WINDOW_HEIGHT * 0.5)
+ORIGIN = (config.WINDOW_WIDTH * 0.5, config.WINDOW_HEIGHT * 0.5)
+
+HUD_MARGIN = 40
+HUD_WIDTH = 400
+HUD_PAD = 16
 
 MUSCLE = "muscle"
 """Особый режим редактора: ставим не клетку, а верёвку между двумя клетками."""
@@ -54,9 +54,9 @@ def kind_help(kind: str) -> list[str]:
     """Короткие строки про выбранный вид: как работает, цена, голод, бой."""
     kwargs = {
         "cost": cell_cost(kind),
-        "upkeep": cell_upkeep(kind),
+        "upkeep": cell_upkeep(kind, kind == "root"),
         "work": cell_work_upkeep(kind),
-        "food": food_energy(kind),
+        "food": food_energy(kind, kind == "root"),
         "chance": round(config.PHOTOSYNTH_UPKEEP_CHANCE * 100),
         "heat": config.THRUSTER_OVERHEAT_TIME,
         "cool": config.THRUSTER_COOLDOWN_TIME,
@@ -101,12 +101,13 @@ class EditorScene:
         self._drag_anchor: tuple[int, int] | None = None
         self.font = render.get_font(20)
         self.small_font = render.get_font(16)
-        self.big_font = render.get_font(34, bold=True)
         self.time = 0.0
         self.next_scene = None
         self._stage_hit: list[tuple[pygame.Rect, str, int | None]] = []
-        # «Ставим» + настройки вида + описание: пока курсор здесь — виден kind_help
-        self._kind_hover_rect = pygame.Rect(0, 0, 0, 0)
+        self._hud_hit: list[pygame.Rect] = []
+        self._pointer = (-1, -1)  # пока мышь не двигали — описания нет
+        self._help_slide = 0.0  # 0 — за левым краем, 1 — на месте
+        self._help_hide_timer = 0.0
         self.menu = Menu(from_editor=True)
 
     @property
@@ -126,6 +127,7 @@ class EditorScene:
         if self.menu.handle_event(event):
             return
         if event.type == pygame.MOUSEBUTTONDOWN:
+            self._pointer = event.pos
             if event.button == 2:
                 # средняя кнопка — перетаскивание вида, не ставит клетку
                 self._dragging = True
@@ -133,7 +135,7 @@ class EditorScene:
                 return
             if event.button == 1 and self._click_stage_ui(event.pos):
                 return
-            if event.pos[0] >= panel_x():
+            if self._over_hud(event.pos):
                 return
             coord = self._coord_at(event.pos)
             if event.button == 1:
@@ -160,6 +162,7 @@ class EditorScene:
                 self._drag_anchor = None
 
         elif event.type == pygame.MOUSEMOTION:
+            self._pointer = event.pos
             if self._dragging and self._drag_anchor is not None:
                 self.pan[0] += event.pos[0] - self._drag_anchor[0]
                 self.pan[1] += event.pos[1] - self._drag_anchor[1]
@@ -330,6 +333,7 @@ class EditorScene:
                 self.pan[1] += move
             if keys[pygame.K_DOWN]:
                 self.pan[1] -= move
+        self._step_help_slide(dt)
         scene, self.next_scene = self.next_scene, None
         return scene
 
@@ -342,8 +346,7 @@ class EditorScene:
         """
         ox, oy = self._origin()
         size = config.EDITOR_HEX_SIZE
-        px = panel_x()
-        corners = [(0, 0), (px - 20, 0), (0, config.HEIGHT), (px - 20, config.HEIGHT)]
+        corners = [(0, 0), (config.WIDTH, 0), (0, config.HEIGHT), (config.WIDTH, config.HEIGHT)]
         qs, rs = [], []
         for x, y in corners:
             q, r = hexgrid.pixel_to_hex(x - ox, y - oy, size)
@@ -380,7 +383,7 @@ class EditorScene:
                 self._draw_maneuver_marks(surface, center, spec.group, spec.brake)
 
         self._draw_muscles(surface, size)
-        self._draw_panel(surface)
+        self._draw_hud(surface)
         self.menu.draw(surface)
 
     def _cell_center(self, coord: Coord, size: float) -> tuple[float, float]:
@@ -478,12 +481,48 @@ class EditorScene:
         self._stage_hit.append((minus_rect, "remove", None))
         return y + 34
 
-    def _draw_panel(self, surface: pygame.Surface) -> None:
-        x = panel_x()
-        y = 40
-        title = self.big_font.render(t("editor.title"), True, config.FG_COLOR)
-        surface.blit(title, (x, y))
-        y += 50
+    def _over_hud(self, pos: tuple[int, int]) -> bool:
+        return any(rect.collidepoint(pos) for rect in self._hud_hit)
+
+    def _help_wanted(self) -> bool:
+        if self.menu.open:
+            return False
+        x, y = self._pointer
+        if x < 0 or y < 0 or x >= config.WIDTH or y >= config.HEIGHT:
+            return False
+        return not self._over_hud(self._pointer)
+
+    def _inspect_help(self) -> tuple[str, CellSpec | None]:
+        """Вид для левой панели: клетка под курсором или то, что ставим."""
+        coord = self._coord_at(self._pointer)
+        spec = self.blueprint.cells.get(coord)
+        if spec is not None:
+            kind = "root" if coord == ROOT else spec.kind
+            return kind, spec
+        return self.kind, None
+
+    def _step_help_slide(self, dt: float) -> None:
+        if self._help_wanted():
+            self._help_hide_timer = 0.0
+            self._help_slide = min(1.0, self._help_slide + dt / config.EDITOR_HELP_SLIDE_TIME)
+            return
+        self._help_hide_timer += dt
+        if self._help_hide_timer >= config.EDITOR_HELP_HIDE_DELAY:
+            self._help_slide = max(0.0, self._help_slide - dt / config.EDITOR_HELP_SLIDE_TIME)
+
+    def _hud_x(self) -> int:
+        return config.WIDTH - HUD_WIDTH
+
+    def _draw_hud(self, surface: pygame.Surface) -> None:
+        self._hud_hit = []
+        self._draw_stats(surface)
+        self._draw_keys(surface)
+        self._draw_help(surface)
+
+    def _draw_stats(self, surface: pygame.Surface) -> None:
+        x = self._hud_x()
+        y = HUD_MARGIN
+        top = y
         y = self._draw_stage_row(surface, x, y)
         y += 8
 
@@ -500,7 +539,6 @@ class EditorScene:
         )
         y += 28
 
-        # аппетит: сколько тело просит за один удар голода и какой у него бак
         appetite = self.blueprint.appetite()
         surface.blit(
             self.font.render(
@@ -521,91 +559,139 @@ class EditorScene:
             )
             y += 22
 
-        # без еды и без фотосинтеза тело только тратит — и умрёт с голоду
         kinds = {spec.kind for spec in self.blueprint.cells.values()}
         if PROCESSOR not in kinds and PHOTOSYNTH not in kinds:
             warn = (230, 130, 120)
             for key in ("editor.starve1", "editor.starve2"):
                 surface.blit(self.font.render(t(key), True, warn), (x, y))
                 y += 26
-        y += 8
 
-        kind_top = y
-        surface.blit(
-            self.font.render(t("editor.placing", kind=t(f"kind.{self.kind}")), True, config.FG_COLOR),
-            (x, y),
-        )
-        y += 26
-        if self.kind == EYE:
+        if self.last_score is not None:
+            y += 8
             surface.blit(
-                self.small_font.render(
-                    t("editor.looks", look=t(f"look.{self.look}")),
-                    True,
-                    config.FG_COLOR,
-                ),
+                self.font.render(t("editor.last", n=self.last_score), True, config.FOOD_COLOR),
                 (x, y),
             )
+            y += 28
+
+        self._hud_hit.append(
+            pygame.Rect(x - HUD_PAD, top - HUD_PAD, HUD_WIDTH + HUD_PAD * 2, y - top + HUD_PAD)
+        )
+
+    def _draw_keys(self, surface: pygame.Surface) -> None:
+        x = self._hud_x()
+        height = 20 * len(KEY_LINES)
+        y = config.HEIGHT - HUD_MARGIN - height
+        self._hud_hit.append(
+            pygame.Rect(
+                x - HUD_PAD,
+                y - HUD_PAD,
+                HUD_WIDTH + HUD_PAD * 2,
+                height + HUD_PAD * 2,
+            )
+        )
+        for key in KEY_LINES:
+            surface.blit(self.small_font.render(t(key), True, config.FG_COLOR), (x, y))
             y += 20
-        if self.kind == MUSCLE:
-            surface.blit(
+
+    def _draw_help(self, surface: pygame.Surface) -> None:
+        if self._help_slide <= 0.0:
+            return
+        x = int(-HUD_WIDTH + (HUD_MARGIN + HUD_WIDTH) * self._help_slide)
+        y = config.HEIGHT - HUD_MARGIN
+        kind, spec = self._inspect_help()
+        y = self._draw_help_body(surface, x, y, kind, spec)
+
+    def _draw_help_body(
+        self,
+        surface: pygame.Surface,
+        x: int,
+        bottom: int,
+        kind: str,
+        spec: CellSpec | None,
+    ) -> int:
+        """Текст снизу вверх: сначала меряем, потом рисуем от низа."""
+        lines: list[tuple[pygame.Surface, int]] = []
+        title_kind = t(f"kind.{kind}")
+        if spec is None:
+            title = self.font.render(t("editor.placing", kind=title_kind), True, config.FG_COLOR)
+        else:
+            title = self.font.render(title_kind, True, config.FG_COLOR)
+        lines.append((title, 26))
+        setting = spec if spec is not None else None
+        group = setting.group if setting is not None else self.group
+        look = setting.look if setting is not None else self.look
+        brake = setting.brake if setting is not None else self.brake
+        direction = setting.direction if setting is not None else self.direction
+        show_kind = kind if spec is not None else self.kind
+
+        def add(text: pygame.Surface, step: int) -> None:
+            lines.append((text, step))
+
+        if show_kind == EYE:
+            add(
+                self.small_font.render(
+                    t("editor.looks", look=t(f"look.{look}")), True, config.FG_COLOR
+                ),
+                20,
+            )
+        if show_kind == MUSCLE:
+            add(
                 self.small_font.render(
                     t("editor.muscle", strength=self.strength, group=self.group),
                     True,
                     config.FG_COLOR,
                 ),
-                (x, y),
+                20,
             )
-            y += 20
-        if self.kind == MANEUVER:
-            surface.blit(
+        if show_kind == MANEUVER:
+            add(
                 self.small_font.render(
-                    t("editor.maneuver", percent=self.brake * 10, group=self.group),
+                    t("editor.maneuver", percent=brake * 10, group=group),
                     True,
                     config.FG_COLOR,
                 ),
-                (x, y),
+                20,
             )
-            y += 20
-        if self.kind == THRUSTER:
-            surface.blit(
+        thrust_line: pygame.Surface | None = None
+        if show_kind == THRUSTER:
+            add(
                 self.small_font.render(
-                    t("editor.thruster_btn", group=self.group), True, config.FG_COLOR
+                    t("editor.thruster_btn", group=group), True, config.FG_COLOR
                 ),
-                (x, y),
+                20,
             )
-            y += 20
-            thrust = self.small_font.render(t("editor.thrust_here"), True, config.FG_COLOR)
-            surface.blit(thrust, (x, y))
-            self._draw_direction_preview(surface, (x + thrust.get_width() + 36, y + 8))
-            y += 40
-        mouse = pygame.mouse.get_pos()
-        if self._kind_hover_rect.collidepoint(mouse):
-            for line in kind_help(self.kind):
-                surface.blit(self.small_font.render(line, True, config.FG_COLOR), (x, y))
-                y += 20
-        self._kind_hover_rect = pygame.Rect(x, kind_top, config.WIDTH - x, y - kind_top)
+            thrust_line = self.small_font.render(t("editor.thrust_here"), True, config.FG_COLOR)
+            add(thrust_line, 40)
+        for line in kind_help(kind):
+            add(self.small_font.render(line, True, config.FG_COLOR), 20)
         if self.kind == MUSCLE and self.muscle_start is not None:
-            surface.blit(
+            add(
                 self.small_font.render(t("editor.muscle_next"), True, config.FOOD_COLOR),
-                (x, y),
-            )
-            y += 20
-
-        y += 8
-        for key in KEY_LINES:
-            surface.blit(self.small_font.render(t(key), True, config.FG_COLOR), (x, y))
-            y += 20
-
-        if self.last_score is not None:
-            y += 20
-            surface.blit(
-                self.font.render(t("editor.last", n=self.last_score), True, config.FOOD_COLOR),
-                (x, y),
+                20,
             )
 
-    def _draw_direction_preview(self, surface: pygame.Surface, center: tuple[float, float]) -> None:
+        y = bottom - sum(step for _surf, step in lines)
+        cursor = y
+        for surf, step in lines:
+            if thrust_line is not None and surf is thrust_line:
+                surface.blit(surf, (x, cursor))
+                self._draw_direction_preview(
+                    surface, (x + surf.get_width() + 36, cursor + 8), direction
+                )
+            else:
+                surface.blit(surf, (x, cursor))
+            cursor += step
+        return y
+
+    def _draw_direction_preview(
+        self,
+        surface: pygame.Surface,
+        center: tuple[float, float],
+        direction: int,
+    ) -> None:
         render.draw_hex(surface, center, 16, config.THRUSTER_COLOR)
-        dx, dy = hexgrid.direction_vector(self.direction)
+        dx, dy = hexgrid.direction_vector(direction)
         pygame.draw.line(
             surface,
             config.FG_COLOR,

@@ -279,6 +279,54 @@ def test_editor_esc_menu_returns_to_main() -> None:
     assert isinstance(next_scene, MainMenuScene)
 
 
+def _move(editor, pos: tuple[float, float]) -> None:
+    editor.handle_event(
+        pygame.event.Event(
+            pygame.MOUSEMOTION, pos=pos, rel=(0, 0), buttons=(0, 0, 0)
+        )
+    )
+
+
+def test_editor_hud_gap_allows_grid_click() -> None:
+    screen = _screen()
+    from evolution.editor import EditorScene
+
+    editor = EditorScene(default_blueprint())
+    editor.draw(screen)
+    gap = (config.WIDTH - 80, config.HEIGHT // 2)
+    assert not editor._over_hud(gap)
+    stats = editor._hud_hit[0]
+    click = (stats.centerx, stats.bottom - 16)
+    assert editor._over_hud(click)
+    before = len(editor.blueprint)
+    editor.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=click, button=1))
+    assert len(editor.blueprint) == before
+
+
+def test_editor_help_follows_hex_and_slides_away() -> None:
+    screen = _screen()
+    from evolution.editor import ORIGIN, EditorScene
+
+    editor = EditorScene(default_blueprint())
+    editor.draw(screen)
+    _move(editor, ORIGIN)
+    editor.update(config.EDITOR_HELP_SLIDE_TIME + 0.05)
+    assert editor._help_slide == 1.0
+    kind, spec = editor._inspect_help()
+    assert kind == "root"
+    assert spec is not None
+
+    empty = (ORIGIN[0] + 220, ORIGIN[1] + 220)
+    _move(editor, empty)
+    assert editor._inspect_help() == (editor.kind, None)
+
+    keys = editor._hud_hit[1]
+    _move(editor, keys.center)
+    editor.update(config.EDITOR_HELP_HIDE_DELAY + config.EDITOR_HELP_SLIDE_TIME + 0.05)
+    assert editor._help_slide == 0.0
+    editor.draw(screen)
+
+
 def test_legacy_creature_json_migrates() -> None:
     _clear_saves()
     saves.index_path().unlink()
